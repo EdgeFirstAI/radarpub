@@ -1,0 +1,23 @@
+[package]
+name = "radar-people"
+description = "People detection using radar"
+repository = "https://bitbucket.org/au-zone/radar-people"
+license = "CLOSED"
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+opt-level = 3
+lto = true
+
+[dependencies]
+drvegrd = { path = "../drvegrd-rs" }
+deepviewrt = { path = "../deepviewrt-rs" }
+async-std = {version = "1.12", features = ["attributes"] }
+cdr = "0.2"
+clap = { version = "4.4", features = ["derive"] }
+deku = { version = "0.16.0", features = ["std", "alloc"] }
+log = "0.4"
+serde = "1.0"
+serde_derive = "1.0"
+socketcan = { version = "3.3", features = ["async-std"] }
