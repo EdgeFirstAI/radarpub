@@ -7,6 +7,7 @@ use rerun::{Color, Points3D, RecordingStream, RecordingStreamResult, TimeSeriesS
 use socketcan::{async_std::CanSocket, CanFrame, EmbeddedFrame, Id as CanId};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Instant;
+use std::f32::consts::PI;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -147,8 +148,10 @@ fn log_time(rr: &RecordingStream, name: &str, t: Instant) -> RecordingStreamResu
 }
 
 fn rae2xyz(range: f32, azimuth: f32, elevation: f32) -> [f32; 3] {
-    let x = range * elevation.cos() * azimuth.cos();
-    let y = range * elevation.cos() * azimuth.sin();
-    let z = range * elevation.sin();
+    let azi = azimuth / 180.0 * PI;
+    let ele = elevation /  180.0 * PI;
+    let x = range * ele.cos() * azi.cos();
+    let y = range * ele.cos() * azi.sin();
+    let z = range * ele.sin();
     [x, y, z]
 }
