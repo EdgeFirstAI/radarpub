@@ -11,8 +11,8 @@ opt-level = 3
 lto = true
 
 [dependencies]
-drvegrd = { path = "../drvegrd-rs" }
-deepviewrt = { path = "../deepviewrt-rs" }
+drvegrd = { git = "ssh://git@bitbucket.org/au-zone/drvegrd-rs.git" }
+deepviewrt = { git = "https://github.com/DeepViewML/deepviewrt-rs", branch = "RVN-130" }
 async-std = {version = "1.12", features = ["attributes"] }
 cdr = "0.2"
 clap = { version = "4.4", features = ["derive"] }

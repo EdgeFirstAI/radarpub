@@ -1401,6 +1401,7 @@ checksum = "7e962a19be5cfc3f3bf6dd8f61eb50107f356ad6270fbb3ed41476571db78be5"
 [[package]]
 name = "deepviewrt"
 version = "0.0.0"
+source = "git+https://github.com/DeepViewML/deepviewrt-rs?branch=RVN-130#c6f2543cb32fb4f110db3042617b9befaa7b2e1b"
 dependencies = [
  "deepviewrt-sys",
 ]
@@ -1408,6 +1409,7 @@ dependencies = [
 [[package]]
 name = "deepviewrt-sys"
 version = "0.0.0"
+source = "git+https://github.com/DeepViewML/deepviewrt-rs?branch=RVN-130#c6f2543cb32fb4f110db3042617b9befaa7b2e1b"
 dependencies = [
  "libc",
 ]
@@ -1554,6 +1556,7 @@ checksum = "9ea835d29036a4087793836fa931b08837ad5e957da9e23886b29586fb9b6650"
 [[package]]
 name = "drvegrd"
 version = "0.1.0"
+source = "git+ssh://git@bitbucket.org/au-zone/drvegrd-rs.git#2eda47baf0a68ccb6af147238900ff8014fb2404"
 dependencies = [
  "async-std",
  "cdr",
