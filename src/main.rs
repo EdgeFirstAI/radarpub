@@ -1,67 +1,121 @@
 use async_std::task::block_on;
+use clap::Parser;
 use deepviewrt::context::Context;
 use drvegrd::{load_data, read_frame, Error, Packet};
+use rerun::external::re_sdk_comms::DEFAULT_SERVER_PORT;
+use rerun::{Color, Points3D, RecordingStream, RecordingStreamResult, TimeSeriesScalar};
 use socketcan::{async_std::CanSocket, CanFrame, EmbeddedFrame, Id as CanId};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Instant;
 
-fn main() {
-    let mut context = Context::new(None, 0, 0).unwrap();
-    let model = std::fs::read("model.rtm").unwrap();
-    context.load_model(model).unwrap();
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// connect to remote rerun viewer at this address
+    #[arg(short, long)]
+    connect: Option<Ipv4Addr>,
 
-    let mut input = context.tensor("batch_normalization_4/batchnorm/mul_1;batch_normalization_4/batchnorm/add_1;sequential_4/mlp_block/sequential/dense/MatMul;sequential_4/mlp_block/sequential/dense/Relu;sequential_4/mlp_block/sequential/dense/BiasAdd1_preact_dv").unwrap();
-    let output = context.tensor("StatefulPartitionedCall:0").unwrap();
+    /// use this port for the rerun viewer (remote or web server)
+    port: Option<u16>,
+
+    /// zenoh connection mode
+    #[arg(short, long, default_value = "peer")]
+    mode: String,
+
+    /// connect to endpoint
+    #[arg(short, long)]
+    endpoint: Vec<String>,
+
+    /// ros topic
+    #[arg(short, long, default_value = "rt/camera/compressed")]
+    topic: String,
+}
+
+#[async_std::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Args::parse();
+
+    let rr = if let Some(addr) = args.connect {
+        let port = args.port.unwrap_or(DEFAULT_SERVER_PORT);
+        let remote = SocketAddr::new(addr.into(), port);
+        rerun::RecordingStreamBuilder::new("radar-people")
+            .connect_opts(remote, rerun::default_flush_timeout())?
+    } else {
+        rerun::RecordingStreamBuilder::new("radar-people").spawn()?
+    };
+
+    rerun::Logger::new(rr.clone())
+        .with_path_prefix("logs")
+        .with_filter(rerun::default_log_filter())
+        .init()?;
+    log::info!("starting radar people classifier");
+    log::logger().flush();
+
+    let mut context = Context::new(None, 0, 0)?;
+    let model = std::fs::read("model.rtm")?;
+    context.load_model(model)?;
+
+    let mut input = context.tensor("serving_default_input_101:0")?;
+    let output = context.tensor("StatefulPartitionedCall:0")?;
 
     println!("input: {} => {:?}", input.dims(), input.shape());
     println!("output: {} => {:?}", output.dims(), output.shape());
 
-    let sock = CanSocket::open("can0").unwrap();
+    let sock = CanSocket::open("can0")?;
 
     loop {
         match read_frame(read_packet, &sock) {
             Err(err) => println!("Error: {:?}", err),
             Ok(frame) => {
-                let mut labels = vec![false; frame.header.n_targets as usize];
-
                 let now = Instant::now();
                 match input.maprw_f32() {
                     Err(err) => panic!("failed to map input: {:?}", err),
                     Ok(mut map) => {
-                        for idx in 0..frame.header.n_targets as usize {
-                            map[idx * 5] = frame.targets[idx].speed as f32;
-                            map[idx * 5 + 1] = frame.targets[idx].rcs as f32;
-                            map[idx * 5 + 1] = frame.targets[idx].noise as f32;
-                            map[idx * 5 + 1] = frame.targets[idx].power as f32;
-                            map[idx * 5 + 1] = 0.0;
+                        for idx in 0..frame.header.n_targets {
+                            let tgt = &frame.targets[idx];
+                            map[idx * 4] = tgt.speed as f32;
+                            map[idx * 4 + 1] = tgt.power as f32;
+                            map[idx * 4 + 2] = tgt.rcs as f32;
+                            map[idx * 4 + 3] = tgt.noise as f32;
                         }
                     }
                 }
-                let input_time = now.elapsed();
+
+                context.run()?;
+                log_time(&rr, "model", now)?;
 
                 let now = Instant::now();
-                context.run().unwrap();
-                let model_time = now.elapsed();
-
-                let now = Instant::now();
+                let mut labels = vec![0.0f32; frame.header.n_targets];
                 match output.mapro_f32() {
                     Err(err) => panic!("failed to map output: {:?}", err),
                     Ok(map) => {
-                        for idx in 0..frame.header.n_targets as usize {
-                            labels[idx] = map[idx] > 0.5;
+                        for idx in 0..frame.header.n_targets {
+                            labels[idx] = map[idx];
                         }
                     }
                 }
-                let output_time = now.elapsed();
 
-                println!(
-                    "[{}.{}] in: {:?} run: {:?} out: {:?} => {:?}",
-                    frame.header.seconds,
-                    frame.header.nanoseconds,
-                    input_time,
-                    model_time,
-                    output_time,
-                    labels.len(),
-                );
+                rr.log(
+                    "radar",
+                    &Points3D::new((0..frame.header.n_targets).map(|idx| {
+                        let tgt = &frame.targets[idx];
+                        rae2xyz(tgt.range as f32, tgt.azimuth as f32, tgt.elevation as f32)
+                    }))
+                    .with_radii([0.5])
+                    .with_labels(
+                        (0..frame.header.n_targets)
+                            .map(|idx| format!("{} => {:?}", labels[idx], frame.targets[idx])),
+                    )
+                    .with_colors(labels.iter().map(|l| {
+                        if *l > 0.5 {
+                            Color::from_rgb(0, 255, 0)
+                        } else {
+                            Color::from_rgb(255, 255, 255)
+                        }
+                    })),
+                )?;
+
+                log_time(&rr, "draw", now)?;
             }
         }
     }
@@ -83,4 +137,18 @@ fn read_packet(can: &CanSocket) -> Result<Packet, Error> {
         Ok(CanFrame::Error(frame)) => panic!("Unexpected error frame: {:?}", frame),
         Err(err) => Err(Error::Io(err)),
     }
+}
+
+fn log_time(rr: &RecordingStream, name: &str, t: Instant) -> RecordingStreamResult<()> {
+    rr.log(
+        name,
+        &TimeSeriesScalar::new(t.elapsed().as_nanos() as f64 / 1e9),
+    )
+}
+
+fn rae2xyz(range: f32, azimuth: f32, elevation: f32) -> [f32; 3] {
+    let x = range * elevation.cos() * azimuth.cos();
+    let y = range * elevation.cos() * azimuth.sin();
+    let z = range * elevation.sin();
+    [x, y, z]
 }

@@ -1,7 +1,7 @@
 [package]
-name = "radar-people"
-description = "People detection using radar"
-repository = "https://bitbucket.org/au-zone/radar-people"
+name = "radarpub"
+description = "Raivin Radar Publisher"
+repository = "https://bitbucket.org/au-zone/radarpub"
 license = "CLOSED"
 version = "0.1.0"
 edition = "2021"
@@ -21,3 +21,5 @@ log = "0.4"
 serde = "1.0"
 serde_derive = "1.0"
 socketcan = { version = "3.3", features = ["async-std"] }
+rerun = "0.11.0"
+rand = "0.8.5"
