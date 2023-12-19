@@ -16,10 +16,10 @@ deepviewrt = { git = "https://github.com/DeepViewML/deepviewrt-rs", branch = "RV
 async-std = {version = "1.12", features = ["attributes"] }
 cdr = "0.2"
 clap = { version = "4.4", features = ["derive"] }
-deku = { version = "0.16.0", features = ["std", "alloc"] }
 log = "0.4"
 serde = "1.0"
 serde_derive = "1.0"
 socketcan = { version = "3.3", features = ["async-std"] }
-rerun = "0.11.0"
-rand = "0.8.5"
+unix-ts = "0.6.0"
+zenoh = "0.10.0-rc"
+zenoh-ros-type = { git = "https://github.com/MaivinAI/zenoh-ros-type" }

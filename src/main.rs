@@ -1,26 +1,38 @@
 use async_std::task::block_on;
+use cdr::{CdrLe, Infinite};
 use clap::Parser;
 use deepviewrt::context::Context;
-use drvegrd::{load_data, read_frame, Error, Packet};
-use rerun::external::re_sdk_comms::DEFAULT_SERVER_PORT;
-use rerun::{Color, Points3D, RecordingStream, RecordingStreamResult, TimeSeriesScalar};
+use drvegrd::Frame;
+use drvegrd::{load_data, read_frame, Packet};
 use socketcan::{async_std::CanSocket, CanFrame, EmbeddedFrame, Id as CanId};
-use std::net::{Ipv4Addr, SocketAddr};
-use std::time::Instant;
+use std::error::Error;
 use std::f32::consts::PI;
+use std::str::FromStr as _;
+use std::time::Instant;
+use unix_ts::Timestamp;
+use zenoh::{config::Config, prelude::r#async::*};
+use zenoh_ros_type::common_interfaces::sensor_msgs::PointCloud2;
+use zenoh_ros_type::common_interfaces::sensor_msgs::PointField;
+use zenoh_ros_type::rcl_interfaces::builtin_interfaces::Time as ROSTime;
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub enum PointFieldType {
+    INT8 = 1,
+    UINT8 = 2,
+    INT16 = 3,
+    UINT16 = 4,
+    INT32 = 5,
+    UINT32 = 6,
+    FLOAT32 = 7,
+    FLOAT64 = 8,
+}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// connect to remote rerun viewer at this address
-    #[arg(short, long)]
-    connect: Option<Ipv4Addr>,
-
-    /// use this port for the rerun viewer (remote or web server)
-    port: Option<u16>,
-
     /// zenoh connection mode
-    #[arg(short, long, default_value = "peer")]
+    #[arg(long, default_value = "peer")]
     mode: String,
 
     /// connect to endpoint
@@ -28,101 +40,149 @@ struct Args {
     endpoint: Vec<String>,
 
     /// ros topic
-    #[arg(short, long, default_value = "rt/camera/compressed")]
+    #[arg(short, long, default_value = "rt/radar/targets")]
     topic: String,
+
+    /// classify targets using model
+    #[arg(short, long)]
+    model: Option<String>,
+
+    /// can device connected to radar
+    #[arg(short, long, default_value = "can0")]
+    can: String,
 }
 
 #[async_std::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
+    let mut config = Config::default();
 
-    let rr = if let Some(addr) = args.connect {
-        let port = args.port.unwrap_or(DEFAULT_SERVER_PORT);
-        let remote = SocketAddr::new(addr.into(), port);
-        rerun::RecordingStreamBuilder::new("radar-people")
-            .connect_opts(remote, rerun::default_flush_timeout())?
-    } else {
-        rerun::RecordingStreamBuilder::new("radar-people").spawn()?
+    let mode = WhatAmI::from_str(&args.mode).unwrap();
+    config.set_mode(Some(mode)).unwrap();
+    config.connect.endpoints = args.endpoint.iter().map(|v| v.parse().unwrap()).collect();
+
+    let session = zenoh::open(config).res().await.unwrap();
+
+    let mut classifier = match args.model {
+        Some(path) => {
+            let mut context = Context::new(None, 0, 0)?;
+            let model = std::fs::read(path)?;
+            context.load_model(model)?;
+            Some(context)
+        }
+        None => None,
     };
 
-    rerun::Logger::new(rr.clone())
-        .with_path_prefix("logs")
-        .with_filter(rerun::default_log_filter())
-        .init()?;
-    log::info!("starting radar people classifier");
-    log::logger().flush();
-
-    let mut context = Context::new(None, 0, 0)?;
-    let model = std::fs::read("model.rtm")?;
-    context.load_model(model)?;
-
-    let mut input = context.tensor("serving_default_input_101:0")?;
-    let output = context.tensor("StatefulPartitionedCall:0")?;
-
-    println!("input: {} => {:?}", input.dims(), input.shape());
-    println!("output: {} => {:?}", output.dims(), output.shape());
-
-    let sock = CanSocket::open("can0")?;
+    let sock = CanSocket::open(&args.can)?;
 
     loop {
         match read_frame(read_packet, &sock) {
             Err(err) => println!("Error: {:?}", err),
             Ok(frame) => {
-                let now = Instant::now();
-                match input.maprw_f32() {
-                    Err(err) => panic!("failed to map input: {:?}", err),
-                    Ok(mut map) => {
-                        for idx in 0..frame.header.n_targets {
-                            let tgt = &frame.targets[idx];
-                            map[idx * 4] = tgt.speed as f32;
-                            map[idx * 4 + 1] = tgt.power as f32;
-                            map[idx * 4 + 2] = tgt.rcs as f32;
-                            map[idx * 4 + 3] = tgt.noise as f32;
-                        }
-                    }
-                }
+                let labels = match &mut classifier {
+                    Some(classifier) => classify(classifier, &frame)?,
+                    None => (0..frame.header.n_targets).map(|_| 0.0f32).collect(),
+                };
 
-                context.run()?;
-                log_time(&rr, "model", now)?;
-
-                let now = Instant::now();
-                let mut labels = vec![0.0f32; frame.header.n_targets];
-                match output.mapro_f32() {
-                    Err(err) => panic!("failed to map output: {:?}", err),
-                    Ok(map) => {
-                        for idx in 0..frame.header.n_targets {
-                            labels[idx] = map[idx];
-                        }
-                    }
-                }
-
-                rr.log(
-                    "radar",
-                    &Points3D::new((0..frame.header.n_targets).map(|idx| {
+                let data: Vec<_> = (0..frame.header.n_targets)
+                    .flat_map(|idx| {
                         let tgt = &frame.targets[idx];
-                        rae2xyz(tgt.range as f32, tgt.azimuth as f32, tgt.elevation as f32)
-                    }))
-                    .with_radii([0.5])
-                    .with_labels(
-                        (0..frame.header.n_targets)
-                            .map(|idx| format!("{} => {:?}", labels[idx], frame.targets[idx])),
-                    )
-                    .with_colors(labels.iter().map(|l| {
-                        if *l > 0.5 {
-                            Color::from_rgb(0, 255, 0)
-                        } else {
-                            Color::from_rgb(255, 255, 255)
-                        }
-                    })),
-                )?;
+                        let xyz = transform_xyz(
+                            tgt.range as f32,
+                            tgt.azimuth as f32,
+                            tgt.elevation as f32,
+                        );
+                        [xyz[0], xyz[1], xyz[2], labels[idx]]
+                    })
+                    .flat_map(|elem| elem.to_ne_bytes())
+                    .collect();
 
-                log_time(&rr, "draw", now)?;
+                let fields = vec![
+                    PointField {
+                        name: String::from("x"),
+                        offset: 0,
+                        datatype: PointFieldType::FLOAT32 as u8,
+                        count: 1,
+                    },
+                    PointField {
+                        name: String::from("y"),
+                        offset: 4,
+                        datatype: PointFieldType::FLOAT32 as u8,
+                        count: 1,
+                    },
+                    PointField {
+                        name: String::from("z"),
+                        offset: 8,
+                        datatype: PointFieldType::FLOAT32 as u8,
+                        count: 1,
+                    },
+                    PointField {
+                        name: String::from("label"),
+                        offset: 12,
+                        datatype: PointFieldType::FLOAT32 as u8,
+                        count: 1,
+                    },
+                ];
+
+                let ts: Timestamp = Instant::now().elapsed().into();
+                let msg = PointCloud2 {
+                    header: zenoh_ros_type::std_msgs::Header {
+                        stamp: ROSTime {
+                            sec: ts.seconds() as i32,
+                            nanosec: ts.subsec(9),
+                        },
+                        frame_id: "".to_string(),
+                    },
+                    height: 1,
+                    width: frame.header.n_targets as u32,
+                    fields,
+                    is_bigendian: false,
+                    point_step: 16,
+                    row_step: 16 * frame.header.n_targets as u32,
+                    data,
+                    is_dense: true,
+                };
+
+                let encoded = cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?;
+                session.put(&args.topic, encoded).res().await.unwrap();
             }
         }
     }
 }
 
-fn read_packet(can: &CanSocket) -> Result<Packet, Error> {
+fn classify(
+    classifier: &mut deepviewrt::context::Context,
+    frame: &Frame,
+) -> Result<Vec<f32>, Box<dyn Error>> {
+    match classifier.input_mut(0)?.maprw_f32() {
+        Err(err) => panic!("failed to map input: {:?}", err),
+        Ok(mut map) => {
+            for idx in 0..frame.header.n_targets {
+                let tgt = &frame.targets[idx];
+                map[idx * 4] = tgt.speed as f32;
+                map[idx * 4 + 1] = tgt.power as f32;
+                map[idx * 4 + 2] = tgt.rcs as f32;
+                map[idx * 4 + 3] = tgt.noise as f32;
+            }
+        }
+    }
+
+    classifier.run()?;
+
+    let mut labels = vec![0.0f32; frame.header.n_targets];
+    match classifier.output(0)?.mapro_f32() {
+        Err(err) => panic!("failed to map output: {:?}", err),
+        Ok(map) => {
+            for idx in 0..frame.header.n_targets {
+                labels[idx] = map[idx];
+            }
+        }
+    }
+
+    Ok(labels)
+}
+
+fn read_packet(can: &CanSocket) -> Result<Packet, drvegrd::Error> {
     match block_on(can.read_frame()) {
         Ok(CanFrame::Data(frame)) => {
             let id = match frame.id() {
@@ -136,20 +196,13 @@ fn read_packet(can: &CanSocket) -> Result<Packet, Error> {
         }
         Ok(CanFrame::Remote(frame)) => panic!("Unexpected remote frame: {:?}", frame),
         Ok(CanFrame::Error(frame)) => panic!("Unexpected error frame: {:?}", frame),
-        Err(err) => Err(Error::Io(err)),
+        Err(err) => Err(drvegrd::Error::Io(err)),
     }
 }
 
-fn log_time(rr: &RecordingStream, name: &str, t: Instant) -> RecordingStreamResult<()> {
-    rr.log(
-        name,
-        &TimeSeriesScalar::new(t.elapsed().as_nanos() as f64 / 1e9),
-    )
-}
-
-fn rae2xyz(range: f32, azimuth: f32, elevation: f32) -> [f32; 3] {
+fn transform_xyz(range: f32, azimuth: f32, elevation: f32) -> [f32; 3] {
     let azi = azimuth / 180.0 * PI;
-    let ele = elevation /  180.0 * PI;
+    let ele = elevation / 180.0 * PI;
     let x = range * ele.cos() * azi.cos();
     let y = range * ele.cos() * azi.sin();
     let z = range * ele.sin();
