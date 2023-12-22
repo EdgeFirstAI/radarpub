@@ -4,17 +4,18 @@ use clap::Parser;
 use deepviewrt::context::Context;
 use drvegrd::Frame;
 use drvegrd::{load_data, read_frame, Packet};
+use futures::join;
 use socketcan::{async_std::CanSocket, CanFrame, EmbeddedFrame, Id as CanId};
 use std::error::Error;
 use std::f32::consts::PI;
 use std::str::FromStr as _;
 use std::time::Instant;
+use std::time::{Duration, SystemTime};
 use unix_ts::Timestamp;
 use zenoh::{config::Config, prelude::r#async::*};
 use zenoh_ros_type::common_interfaces::sensor_msgs::PointCloud2;
 use zenoh_ros_type::common_interfaces::sensor_msgs::PointField;
 use zenoh_ros_type::rcl_interfaces::builtin_interfaces::Time as ROSTime;
-
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum PointFieldType {
@@ -50,6 +51,10 @@ struct Args {
     /// can device connected to radar
     #[arg(short, long, default_value = "can0")]
     can: String,
+
+    /// mirror the radar data
+    #[arg(long)]
+    mirror: bool,
 }
 
 #[async_std::main]
@@ -63,7 +68,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let session = zenoh::open(config).res().await.unwrap();
 
-    let mut classifier = match args.model {
+    let mut classifier = match &args.model {
         Some(path) => {
             let mut context = Context::new(None, 0, 0)?;
             let model = std::fs::read(path)?;
@@ -79,11 +84,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         match read_frame(read_packet, &sock) {
             Err(err) => println!("Error: {:?}", err),
             Ok(frame) => {
+                let now = Instant::now();
                 let labels = match &mut classifier {
                     Some(classifier) => classify(classifier, &frame)?,
                     None => (0..frame.header.n_targets).map(|_| 0.0f32).collect(),
                 };
+                let classify_time = now.elapsed();
 
+                let now = Instant::now();
                 let data: Vec<_> = (0..frame.header.n_targets)
                     .flat_map(|idx| {
                         let tgt = &frame.targets[idx];
@@ -91,6 +99,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             tgt.range as f32,
                             tgt.azimuth as f32,
                             tgt.elevation as f32,
+                            args.mirror,
                         );
                         [xyz[0], xyz[1], xyz[2], labels[idx]]
                     })
@@ -124,7 +133,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     },
                 ];
 
-                let ts: Timestamp = Instant::now().elapsed().into();
+                let ts: Timestamp = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)?
+                    .into();
                 let msg = PointCloud2 {
                     header: zenoh_ros_type::std_msgs::Header {
                         stamp: ROSTime {
@@ -144,7 +155,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 };
 
                 let encoded = cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?;
+                let serialize_time = now.elapsed();
                 session.put(&args.topic, encoded).res().await.unwrap();
+                send_radar_timing(&session, &args, &classify_time, &serialize_time)
+                    .await
+                    .unwrap();
             }
         }
     }
@@ -182,6 +197,20 @@ fn classify(
     Ok(labels)
 }
 
+async fn send_radar_timing(
+    session: &Session,
+    args: &Args,
+    classify_time: &Duration,
+    serialize_time: &Duration,
+) -> Result<(), Box<dyn Error>> {
+    let class_str = args.topic.clone() + "/classify_time";
+    let serial_str = args.topic.clone() + "/serialize_time";
+    let send_class = send_timing(&session, &class_str, &classify_time);
+    let send_serialize = send_timing(&session, &serial_str, &serialize_time);
+    let _ = join!(send_class, send_serialize);
+    Ok(())
+}
+
 fn read_packet(can: &CanSocket) -> Result<Packet, drvegrd::Error> {
     match block_on(can.read_frame()) {
         Ok(CanFrame::Data(frame)) => {
@@ -200,11 +229,29 @@ fn read_packet(can: &CanSocket) -> Result<Packet, drvegrd::Error> {
     }
 }
 
-fn transform_xyz(range: f32, azimuth: f32, elevation: f32) -> [f32; 3] {
+fn transform_xyz(range: f32, azimuth: f32, elevation: f32, mirror: bool) -> [f32; 3] {
     let azi = azimuth / 180.0 * PI;
     let ele = elevation / 180.0 * PI;
     let x = range * ele.cos() * azi.cos();
     let y = range * ele.cos() * azi.sin();
     let z = range * ele.sin();
-    [x, y, z]
+    if mirror {
+        [x, -y, z]
+    } else {
+        [x, y, z]
+    }
+}
+
+async fn send_timing(
+    session: &Session,
+    topic: &String,
+    time: &Duration,
+) -> Result<(), Box<dyn Error>> {
+    let msg = zenoh_ros_type::builtin_interfaces::Duration {
+        sec: time.as_secs() as _,
+        nanosec: time.subsec_nanos() as _,
+    };
+    let encoded = cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?;
+    session.put(topic, encoded).res().await.unwrap();
+    Ok(())
 }

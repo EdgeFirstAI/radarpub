@@ -1973,6 +1973,7 @@ dependencies = [
  "clap 4.4.11",
  "deepviewrt",
  "drvegrd",
+ "futures",
  "log",
  "serde",
  "serde_derive",
