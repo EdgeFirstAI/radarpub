@@ -44,6 +44,30 @@ struct Args {
     #[arg(short, long, default_value = "rt/radar/targets")]
     topic: String,
 
+    /// clustering by defaut its off
+    #[arg(long)]
+    cluster: bool,
+
+    /// Height of the clustered points
+    #[arg(long, default_value = "0")]
+    proj: f32,
+
+    /// size of the window for clustering
+    #[arg(long, default_value = "6")]
+    window: usize,
+
+    /// distance threshold for clustring
+    #[arg(long, default_value = "0.5")]
+    distance_threshold: f32,
+
+    /// min number of point for a cluster
+    #[arg(long, default_value = "3")]
+    count_threshold: usize,
+
+    /// model threshold for clustring
+    #[arg(long, default_value = "0.3")]
+    model_threshold: f32,
+
     /// classify targets using model
     #[arg(short, long)]
     model: Option<String>,
@@ -55,6 +79,44 @@ struct Args {
     /// mirror the radar data
     #[arg(long)]
     mirror: bool,
+}
+
+fn distance(point1: &[f32], point2: &[f32]) -> f32 {
+    let squared_diff: f32 = point1
+        .iter()
+        .zip(point2)
+        .map(|(x, y)| (x - y).powi(2))
+        .sum();
+    squared_diff.sqrt()
+}
+
+fn cluster_points(points: &Vec<Vec<f32>>, distance_threshold: f32) -> Vec<Vec<Vec<f32>>> {
+    let mut clusters: Vec<Vec<Vec<f32>>> = Vec::new();
+
+    for (_i, point) in points.iter().enumerate() {
+        let mut assigned = false;
+
+        for cluster in clusters.iter_mut() {
+            for existing_point in cluster.iter() {
+                let dist = distance(point, existing_point);
+                if dist < distance_threshold {
+                    cluster.push(point.clone());
+                    assigned = true;
+                    break;
+                }
+            }
+
+            if assigned {
+                break;
+            }
+        }
+
+        if !assigned {
+            clusters.push(vec![point.clone()]);
+        }
+    }
+
+    clusters
 }
 
 #[async_std::main]
@@ -79,6 +141,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let sock = CanSocket::open(&args.can)?;
+    let mut windowed_objs = Vec::new();
+    let mut head = 0;
 
     loop {
         match read_frame(read_packet, &sock) {
@@ -105,7 +169,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     })
                     .flat_map(|elem| elem.to_ne_bytes())
                     .collect();
-
                 let fields = vec![
                     PointField {
                         name: String::from("x"),
@@ -132,6 +195,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         count: 1,
                     },
                 ];
+                let field_clone = fields.clone();
 
                 let ts: Timestamp = SystemTime::now()
                     .duration_since(SystemTime::UNIX_EPOCH)?
@@ -153,13 +217,112 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     data,
                     is_dense: true,
                 };
+                if windowed_objs.len() < args.window {
+                    windowed_objs.push(
+                        (0..frame.header.n_targets)
+                            .map(|idx| {
+                                let tgt = &frame.targets[idx];
+                                let xyz = transform_xyz(
+                                    tgt.range as f32,
+                                    tgt.azimuth as f32,
+                                    tgt.elevation as f32,
+                                    args.mirror,
+                                );
+                                [xyz[0], xyz[1], xyz[2], labels[idx]]
+                            })
+                            .collect::<Vec<[f32; 4]>>(),
+                    );
+                } else {
+                    windowed_objs[head] = (0..frame.header.n_targets)
+                        .map(|idx| {
+                            let tgt = &frame.targets[idx];
+                            let xyz = transform_xyz(
+                                tgt.range as f32,
+                                tgt.azimuth as f32,
+                                tgt.elevation as f32,
+                                args.mirror,
+                            );
+                            [xyz[0], xyz[1], xyz[2], labels[idx]]
+                        })
+                        .collect::<Vec<[f32; 4]>>();
+                    head = (head + 1) % args.window;
+                }
+                let mut kmeans_arr = Vec::new();
+                for v in windowed_objs.iter() {
+                    for p in v {
+                        if p[3] > args.model_threshold {
+                            kmeans_arr.push(p[0]);
+                            kmeans_arr.push(p[1]);
+                            kmeans_arr.push(p[2]);
+                        }
+                    }
+                }
 
-                let encoded = cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?;
-                let serialize_time = now.elapsed();
-                session.put(&args.topic, encoded).res().await.unwrap();
-                send_radar_timing(&session, &args, &classify_time, &serialize_time)
-                    .await
-                    .unwrap();
+                if args.cluster {
+                    let mut points: Vec<Vec<f32>> = Vec::new();
+                    for i in (0..kmeans_arr.len()).step_by(3) {
+                        let point = kmeans_arr[i..(i + 3)].to_vec();
+                        points.push(point);
+                    }
+                    let clusters = cluster_points(&points, args.distance_threshold);
+                    let avg_distances: Vec<_> = clusters
+                        .iter()
+                        .filter(|e| e.len() > args.count_threshold)
+                        .flat_map(|cluster| {
+                            let mut x = 0.0;
+                            let mut y = 0.0;
+                            for p in cluster {
+                                x += p[0];
+                                y += p[1];
+                            }
+                            let count: f32 = cluster.len() as f32;
+                            [x / count, y / count, args.proj, 1.0]
+                        })
+                        .collect();
+                    let data: Vec<_> = avg_distances
+                        .into_iter()
+                        .flat_map(|elem| elem.to_ne_bytes())
+                        .collect();
+
+                    let ts: Timestamp = SystemTime::now()
+                        .duration_since(SystemTime::UNIX_EPOCH)?
+                        .into();
+                    let fields = field_clone;
+                    let cluster_msg = PointCloud2 {
+                        header: zenoh_ros_type::std_msgs::Header {
+                            stamp: ROSTime {
+                                sec: ts.seconds() as i32,
+                                nanosec: ts.subsec(9),
+                            },
+                            frame_id: "".to_string(),
+                        },
+                        height: 1,
+                        width: clusters.len() as u32,
+                        fields,
+                        is_bigendian: false,
+                        point_step: 16,
+                        row_step: 16 * clusters.len() as u32,
+                        data,
+                        is_dense: true,
+                    };
+                    let cluster_encoded = cdr::serialize::<_, _, CdrLe>(&cluster_msg, Infinite)?;
+                    let cluster_serialize_time = now.elapsed();
+                    session
+                        .put(&args.topic, cluster_encoded)
+                        .res()
+                        .await
+                        .unwrap();
+                    send_radar_timing(&session, &args, &classify_time, &cluster_serialize_time)
+                        .await
+                        .unwrap();
+                } else {
+                    let encoded = cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?;
+                    let serialize_time = now.elapsed();
+                    session.put(&args.topic, encoded).res().await.unwrap();
+                    send_radar_timing(&session, &args, &classify_time, &serialize_time)
+                        .await
+                        .unwrap();
+                }
             }
         }
     }
