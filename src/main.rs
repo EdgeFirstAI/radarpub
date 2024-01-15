@@ -4,7 +4,9 @@ use clap::Parser;
 use deepviewrt::context::Context;
 use drvegrd::Frame;
 use drvegrd::{load_data, read_frame, Packet};
+use env_logger;
 use futures::join;
+use log::trace;
 use socketcan::{async_std::CanSocket, CanFrame, EmbeddedFrame, Id as CanId};
 use std::error::Error;
 use std::f32::consts::PI;
@@ -124,6 +126,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     let mut config = Config::default();
 
+    env_logger::init();
+
     let mode = WhatAmI::from_str(&args.mode).unwrap();
     config.set_mode(Some(mode)).unwrap();
     config.connect.endpoints = args.endpoint.iter().map(|v| v.parse().unwrap()).collect();
@@ -169,6 +173,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     })
                     .flat_map(|elem| elem.to_ne_bytes())
                     .collect();
+                trace!("Got a radar message");
                 let fields = vec![
                     PointField {
                         name: String::from("x"),
@@ -217,6 +222,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     data,
                     is_dense: true,
                 };
+                trace!("Created a point cloud");
                 if windowed_objs.len() < args.window {
                     windowed_objs.push(
                         (0..frame.header.n_targets)
@@ -257,6 +263,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         }
                     }
                 }
+                trace!("Created a window message");
 
                 if args.cluster {
                     let mut points: Vec<Vec<f32>> = Vec::new();
@@ -305,6 +312,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         data,
                         is_dense: true,
                     };
+
                     let cluster_encoded = cdr::serialize::<_, _, CdrLe>(&cluster_msg, Infinite)?;
                     let cluster_serialize_time = now.elapsed();
                     session
@@ -315,6 +323,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     send_radar_timing(&session, &args, &classify_time, &cluster_serialize_time)
                         .await
                         .unwrap();
+                    trace!("Sending clustered message");
                 } else {
                     let encoded = cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?;
                     let serialize_time = now.elapsed();
@@ -322,6 +331,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     send_radar_timing(&session, &args, &classify_time, &serialize_time)
                         .await
                         .unwrap();
+                    trace!("Sending unclustered message");
                 }
             }
         }
