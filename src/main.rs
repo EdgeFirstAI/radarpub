@@ -264,10 +264,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         let point = kmeans_arr[i..(i + 3)].to_vec();
                         points.push(point);
                     }
-                    let clusters = cluster_points(&points, args.distance_threshold);
+                    let clusters: Vec<_> = cluster_points(&points, args.distance_threshold)
+                        .into_iter()
+                        .filter(|e| e.len() > args.count_threshold)
+                        .collect();
+
                     let avg_distances: Vec<_> = clusters
                         .iter()
-                        .filter(|e| e.len() > args.count_threshold)
                         .flat_map(|cluster| {
                             let mut x = 0.0;
                             let mut y = 0.0;
