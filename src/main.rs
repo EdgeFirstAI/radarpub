@@ -35,11 +35,11 @@ pub enum PointFieldType {
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// zenoh connection mode
-    #[arg(long, default_value = "peer")]
+    #[arg(long, default_value = "client")]
     mode: String,
 
     /// connect to endpoint
-    #[arg(short, long)]
+    #[arg(short, long, default_value = "tcp/127.0.0.1:7447")]
     endpoint: Vec<String>,
 
     /// ros topic
@@ -124,15 +124,16 @@ fn cluster_points(points: &Vec<Vec<f32>>, distance_threshold: f32) -> Vec<Vec<Ve
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
-    let mut config = Config::default();
 
     env_logger::init();
 
+    let mut config = Config::default();
     let mode = WhatAmI::from_str(&args.mode).unwrap();
     config.set_mode(Some(mode)).unwrap();
     config.connect.endpoints = args.endpoint.iter().map(|v| v.parse().unwrap()).collect();
-
-    let session = zenoh::open(config).res().await.unwrap();
+    let _ = config.scouting.multicast.set_enabled(Some(false));
+    let session = zenoh::open(config.clone()).res_async().await.unwrap();
+    log::info!("Opened Zenoh session");
 
     let mut classifier = match &args.model {
         Some(path) => {
@@ -320,6 +321,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     let cluster_serialize_time = now.elapsed();
                     session
                         .put(&args.topic, cluster_encoded)
+                        .encoding(Encoding::WithSuffix(
+                            KnownEncoding::AppOctetStream,
+                            "sensor_msgs/msg/PointCloud2".into(),
+                        ))
                         .res()
                         .await
                         .unwrap();
@@ -330,7 +335,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 } else {
                     let encoded = cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?;
                     let serialize_time = now.elapsed();
-                    session.put(&args.topic, encoded).res().await.unwrap();
+                    session
+                        .put(&args.topic, encoded)
+                        .encoding(Encoding::WithSuffix(
+                            KnownEncoding::AppOctetStream,
+                            "sensor_msgs/msg/PointCloud2".into(),
+                        ))
+                        .res()
+                        .await
+                        .unwrap();
                     send_radar_timing(&session, &args, &classify_time, &serialize_time)
                         .await
                         .unwrap();
@@ -428,6 +441,14 @@ async fn send_timing(
         nanosec: time.subsec_nanos() as _,
     };
     let encoded = cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?;
-    session.put(topic, encoded).res().await.unwrap();
+    session
+        .put(topic, encoded)
+        .encoding(Encoding::WithSuffix(
+            KnownEncoding::AppOctetStream,
+            "sensor_msgs/msg/PointCloud2".into(),
+        ))
+        .res()
+        .await
+        .unwrap();
     Ok(())
 }
