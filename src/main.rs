@@ -441,14 +441,6 @@ async fn send_timing(
         nanosec: time.subsec_nanos() as _,
     };
     let encoded = cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?;
-    session
-        .put(topic, encoded)
-        .encoding(Encoding::WithSuffix(
-            KnownEncoding::AppOctetStream,
-            "sensor_msgs/msg/PointCloud2".into(),
-        ))
-        .res()
-        .await
-        .unwrap();
+    session.put(topic, encoded).res().await.unwrap();
     Ok(())
 }
