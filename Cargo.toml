@@ -3,7 +3,7 @@ name = "radarpub"
 description = "Raivin Radar Publisher"
 repository = "https://bitbucket.org/au-zone/radarpub"
 license = "CLOSED"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2021"
 
 [profile.release]
@@ -17,11 +17,11 @@ async-std = {version = "1.12", features = ["attributes"] }
 cdr = "0.2"
 clap = { version = "4.4", features = ["derive"] }
 log = "0.4"
-env_logger = "0.10"
+env_logger = "0.11"
 serde = "1.0"
 serde_derive = "1.0"
 socketcan = { version = "3.3", features = ["async-std"] }
 unix-ts = "0.6.0"
 zenoh = "0.10.0-rc"
 zenoh-ros-type = { git = "https://github.com/MaivinAI/zenoh-ros-type" }
-futures = "0.3.29"
+futures = "0.3"
