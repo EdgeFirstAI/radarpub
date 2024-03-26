@@ -91,7 +91,7 @@ struct Args {
     model: Option<String>,
 
     /// can device connected to radar
-    #[arg(short, long, default_value = "can0")]
+    #[arg(long, default_value = "can0")]
     can: String,
 
     /// mirror the radar data
@@ -143,7 +143,7 @@ fn format_cube(cube: RadarCube) -> Result<Array5<i16>, Box<dyn std::error::Error
 
     // Move the doppler zero point to the center of the cube.
     let (right, left) = ndcube.view().split_at(Axis(3), 64);
-    let mut ndcube = concatenate(Axis(1), &[left, right])?;
+    let mut ndcube = concatenate(Axis(3), &[left, right])?;
 
     // Invert the range axis so that the minimum is at the bottom.
     ndcube.invert_axis(Axis(1));
@@ -208,6 +208,8 @@ fn udp_loop(session: Arc<Session>, topic: &String) -> Result<(), Box<dyn std::er
                     .into();
                 let shape: Vec<u16> = cube.shape().iter().map(|&x| x as u16).collect();
 
+                let cube_vec: Vec<i16> = cube.iter().cloned().collect();
+
                 let msg = RadCube {
                     header: zenoh_ros_type::std_msgs::Header {
                         stamp: ROSTime {
@@ -223,7 +225,7 @@ fn udp_loop(session: Arc<Session>, topic: &String) -> Result<(), Box<dyn std::er
                         cubemsg.bin_properties.range_per_bin,
                         cubemsg.bin_properties.bin_per_speed,
                     ],
-                    cube: cubemsg.clone().cube,
+                    cube: cube_vec,
                     is_complex: true,
                 };
 
@@ -275,6 +277,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let sock = CanSocket::open(&args.can)?;
     let mut windowed_objs = Vec::new();
     let mut head = 0;
+
     let session_clone = session.clone();
     let cube_topic = args.clone().cube_topic;
     thread::spawn(move || {
