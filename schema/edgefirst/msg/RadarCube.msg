@@ -25,4 +25,6 @@ float32[] scales    # The scaling factors for the dimensions representing bins
 int16[] cube        # The radar cube data as 16bit integers.  If the is_complex
                     # is true then each element will be pairs of integers with
                     # the first being real and the second being imaginary
-bool is_complex     # True if the radar cube is complex
+bool is_complex     # True if the radar cube is complex in which case the final
+                    # dimension will be doubled in size to account for the pair
+                    # of int16 elements representing [real,imaginary].

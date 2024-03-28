@@ -1505,22 +1505,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7e962a19be5cfc3f3bf6dd8f61eb50107f356ad6270fbb3ed41476571db78be5"
 
 [[package]]
-name = "deepviewrt"
-version = "0.0.0"
-source = "git+https://github.com/DeepViewML/deepviewrt-rs?branch=RVN-130#b310737176fe934f443d6fbeea907e7bf5a3af0c"
-dependencies = [
- "deepviewrt-sys",
-]
-
-[[package]]
-name = "deepviewrt-sys"
-version = "0.0.0"
-source = "git+https://github.com/DeepViewML/deepviewrt-rs?branch=RVN-130#b310737176fe934f443d6fbeea907e7bf5a3af0c"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "deku"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1671,8 +1655,8 @@ checksum = "9ea835d29036a4087793836fa931b08837ad5e957da9e23886b29586fb9b6650"
 
 [[package]]
 name = "drvegrd"
-version = "0.1.0"
-source = "git+ssh://git@bitbucket.org/au-zone/drvegrd-rs.git?branch=rc_streamer#8f3471ba384e2b03f14a89203e0469e4b9d7e820"
+version = "1.0.0"
+source = "git+ssh://git@bitbucket.org/au-zone/drvegrd-rs.git?branch=main#a4d8eebf0b2ab39209592c5112de509b3aefe32c"
 dependencies = [
  "async-std",
  "cdr",
@@ -4488,7 +4472,6 @@ dependencies = [
  "async-std",
  "cdr",
  "clap 4.5.3",
- "deepviewrt",
  "drvegrd",
  "env_logger 0.11.3",
  "futures",
@@ -8331,7 +8314,7 @@ dependencies = [
 [[package]]
 name = "zenoh-ros-type"
 version = "0.3.3"
-source = "git+https://github.com/MaivinAI/zenoh-ros-type?branch=radarCube#14c74c3d80538d4f4f87640b27c67eb3213c916c"
+source = "git+https://github.com/MaivinAI/zenoh-ros-type?branch=main#fedd79f45f524bd574145a81e2c0b219cd4cf3a2"
 dependencies = [
  "serde",
  "serde_derive",

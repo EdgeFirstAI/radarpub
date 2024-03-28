@@ -1,0 +1,6 @@
+{
+    "sonarlint.connectedMode.project": {
+        "connectionId": "Au-Zone",
+        "projectKey": "au-zone_radarpub"
+    }
+}
