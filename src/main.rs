@@ -230,15 +230,18 @@ fn udp_loop(session: Arc<Session>, topic: &String) -> Result<(), Box<dyn std::er
                 };
 
                 let encoded = cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?;
-                let _ = session
-                    .put(topic, encoded.clone())
-                    .encoding(Encoding::WithSuffix(
-                        KnownEncoding::AppOctetStream,
-                        "sensor_msgs/msg/RadCube".into(),
-                    ))
-                    .res_async();
-
-                trace!("Sending RadarCube message");
+                match block_on(
+                    session
+                        .put(topic, encoded.clone())
+                        .encoding(Encoding::WithSuffix(
+                            KnownEncoding::AppOctetStream,
+                            "sensor_msgs/msg/RadCube".into(),
+                        ))
+                        .res(),
+                ) {
+                    Ok(_) => trace!("RadarCube Message Sent"),
+                    Err(e) => error!("RadarCube Message Error: {:?}", e),
+                }
             }
             Ok(None) => (),
             Err(err) => error!("Cube Error: {:?}", err),
