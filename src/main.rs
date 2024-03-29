@@ -1,19 +1,12 @@
+use async_std::net::UdpSocket;
 use async_std::task::block_on;
 use cdr::{CdrLe, Infinite};
 use clap::Parser;
 use drvegrd::{eth::RadarCubeReader, load_data, read_frame, Packet};
-
 use log::{error, trace};
 use socketcan::{async_std::CanSocket, CanFrame, EmbeddedFrame, Id as CanId};
-use std::{
-    error::Error,
-    f32::consts::PI,
-    net::UdpSocket,
-    str::FromStr as _,
-    sync::Arc,
-    thread,
-    time::SystemTime,
-};
+use std::{error::Error, f32::consts::PI, str::FromStr as _, sync::Arc, thread, time::SystemTime};
+use kanal::{AsyncSender as Sender, bounded_async as channel};
 use unix_ts::Timestamp;
 use zenoh::{config::Config, prelude::r#async::*};
 use zenoh_ros_type::{
@@ -61,46 +54,62 @@ struct Args {
     /// mirror the radar data
     #[arg(long)]
     mirror: bool,
+
+    /// Center the doppler axis in the cube.
+    #[arg(short = 'd', long)]
+    center_doppler: bool,
 }
 
-fn udp_loop(session: Arc<Session>, topic: &String) -> Result<(), Box<dyn std::error::Error>> {
-    let (tx5, mut rx) = tachyonix::channel(100);
+async fn port5(tx: Sender<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
+    let sock = UdpSocket::bind("0.0.0.0:50005").await.unwrap();
+    let mut buf = [0; 1500];
+
+    loop {
+        match sock.recv_from(&mut buf).await {
+            Ok((n, _)) => match tx.send(buf[..n].to_vec()).await {
+                Ok(_) => (),
+                Err(e) => error!("port5 error: {:?}", e),
+            },
+            Err(e) => error!("port5 error: {:?}", e),
+        }
+    }
+}
+
+async fn port63(tx: Sender<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
+    let sock = UdpSocket::bind("0.0.0.0:50063").await.unwrap();
+    let mut buf = [0; 1500];
+
+    loop {
+        match sock.recv_from(&mut buf).await {
+            Ok((n, _)) => match tx.send(buf[..n].to_vec()).await {
+                Ok(_) => (),
+                Err(e) => error!("port63 error: {:?}", e),
+            },
+            Err(e) => error!("port63 error: {:?}", e),
+        }
+    }
+}
+
+async fn udp_loop(
+    session: Arc<Session>,
+    topic: &String,
+    center_doppler: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (tx5, rx) = channel(10000);
     let tx63 = tx5.clone();
 
-    thread::spawn(move || {
-        let sock = UdpSocket::bind("0.0.0.0:50005").unwrap();
-        let mut buf = [0; 1500];
+    thread::Builder::new()
+        .name("port5".to_string())
+        .spawn(move || block_on(port5(tx5)).unwrap())?;
 
-        loop {
-            match sock.recv_from(&mut buf) {
-                Ok((n, _)) => match block_on(tx5.send(buf[..n].to_vec())) {
-                    Ok(_) => (),
-                    Err(e) => error!("port5 error: {:?}", e),
-                },
-                Err(e) => error!("port5 error: {:?}", e),
-            }
-        }
-    });
-
-    thread::spawn(move || {
-        let sock = UdpSocket::bind("0.0.0.0:50063").unwrap();
-        let mut buf = [0; 1500];
-
-        loop {
-            match sock.recv_from(&mut buf) {
-                Ok((n, _)) => match block_on(tx63.send(buf[..n].to_vec())) {
-                    Ok(_) => (),
-                    Err(e) => error!("port63 error: {:?}", e),
-                },
-                Err(e) => error!("port63 error: {:?}", e),
-            }
-        }
-    });
+    thread::Builder::new()
+        .name("port63".to_string())
+        .spawn(move || block_on(port63(tx63)).unwrap())?;
 
     let mut reader = RadarCubeReader::default();
 
     loop {
-        let msg = match block_on(rx.recv()) {
+        let msg = match rx.recv().await {
             Ok(msg) => msg,
             Err(e) => {
                 error!("recv error: {:?}", e);
@@ -108,7 +117,7 @@ fn udp_loop(session: Arc<Session>, topic: &String) -> Result<(), Box<dyn std::er
             }
         };
 
-        match reader.read(&msg) {
+        match reader.read(&msg, center_doppler) {
             Ok(Some(cubemsg)) => {
                 let ts: Timestamp = SystemTime::now()
                     .duration_since(SystemTime::UNIX_EPOCH)?
@@ -132,9 +141,10 @@ fn udp_loop(session: Arc<Session>, topic: &String) -> Result<(), Box<dyn std::er
 
                 // Cast the Complex<i16> vector to a i16 vector.
                 let data = cubemsg.data.into_raw_vec();
-                let data = unsafe {
+                let data2 = unsafe {
                     Vec::from_raw_parts(data.as_ptr() as *mut i16, data.len() * 2, data.len() * 2)
                 };
+                std::mem::forget(data);
 
                 let msg = edgefirst_msgs::RadarCube {
                     header: zenoh_ros_type::std_msgs::Header {
@@ -153,21 +163,21 @@ fn udp_loop(session: Arc<Session>, topic: &String) -> Result<(), Box<dyn std::er
                         cubemsg.bin_properties.range_per_bin,
                         cubemsg.bin_properties.bin_per_speed,
                     ],
-                    cube: data,
+                    cube: data2,
                     is_complex: true,
                 };
 
                 let encoded = cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?;
 
-                match block_on(
-                    session
-                        .put(topic, encoded.clone())
-                        .encoding(Encoding::WithSuffix(
-                            KnownEncoding::AppOctetStream,
-                            "sensor_msgs/msg/RadCube".into(),
-                        ))
-                        .res(),
-                ) {
+                match session
+                    .put(topic, encoded)
+                    .encoding(Encoding::WithSuffix(
+                        KnownEncoding::AppOctetStream,
+                        "sensor_msgs/msg/RadCube".into(),
+                    ))
+                    .res()
+                    .await
+                {
                     Ok(_) => trace!("RadarCube Message Sent"),
                     Err(e) => error!("RadarCube Message Error: {:?}", e),
                 }
@@ -197,11 +207,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     log::info!("Opened Zenoh session");
 
     let sock = CanSocket::open(&args.can)?;
-    let session_clone = session.clone();
+    let cube_session = session.clone();
 
-    thread::spawn(move || {
-        let _ = udp_loop(session_clone, &args.cube_topic);
-    });
+    thread::Builder::new()
+        .name("radarcube".to_string())
+        .spawn(move || {
+            block_on(udp_loop(
+                cube_session,
+                &args.cube_topic,
+                args.center_doppler,
+            ))
+            .unwrap();
+        })?;
 
     loop {
         match read_frame(read_packet, &sock) {
