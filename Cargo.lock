@@ -1637,7 +1637,7 @@ checksum = "9ea835d29036a4087793836fa931b08837ad5e957da9e23886b29586fb9b6650"
 [[package]]
 name = "drvegrd"
 version = "1.0.0"
-source = "git+ssh://git@bitbucket.org/au-zone/drvegrd-rs.git?rev=5e9486c#5e9486cd13b5bed4dc1367323a4cdf73c13d2981"
+source = "git+ssh://git@bitbucket.org/au-zone/drvegrd-rs.git?rev=8942618#8942618b650e652b80d256d30fe2bf0eb9cd6a24"
 dependencies = [
  "async-std",
  "cdr",
@@ -1646,6 +1646,7 @@ dependencies = [
  "env_logger 0.11.3",
  "etherparse",
  "kanal",
+ "libc",
  "log",
  "ndarray",
  "ndarray-npy",
@@ -1654,6 +1655,7 @@ dependencies = [
  "rerun",
  "serde",
  "serde_derive",
+ "socketcan",
 ]
 
 [[package]]
@@ -4416,6 +4418,7 @@ dependencies = [
  "env_logger 0.11.3",
  "futures",
  "kanal",
+ "libc",
  "log",
  "ndarray",
  "ndarray-npy",
@@ -5492,12 +5495,6 @@ dependencies = [
  "re_tracing",
  "thiserror",
 ]
-
-[[package]]
-name = "readme-rustdocifier"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08ad765b21a08b1a8e5cdce052719188a23772bcbefb3c439f0baaf62c56ceac"
 
 [[package]]
 name = "redox_syscall"
@@ -6783,22 +6780,18 @@ checksum = "c7de7d73e1754487cb58364ee906a499937a0dfabd86bcb980fa99ec8c8fa2ce"
 
 [[package]]
 name = "unix-ts"
-version = "0.6.0"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a4f7e2a0ec19e18b93b3801b5271311f8f924527df3775067e039a488e48965"
+checksum = "2e88bab2be9575823c160e1ca9869179a5b9381e23e1013fdbe4c75fd8705e1a"
 dependencies = [
- "readme-rustdocifier",
  "unix-ts-macros",
 ]
 
 [[package]]
 name = "unix-ts-macros"
-version = "0.4.0"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "778a90a350e66d5df234e112037b7e67733e31db6d5cc280e7812a58b5088848"
-dependencies = [
- "readme-rustdocifier",
-]
+checksum = "4cf5fd32fe602f27c0db508ffab4a845120fdb7474ea78c01e5c483ac1b09951"
 
 [[package]]
 name = "unsafe-libyaml"

@@ -12,7 +12,7 @@ lto = true
 debug = true
 
 [dependencies]
-drvegrd = { git = "ssh://git@bitbucket.org/au-zone/drvegrd-rs.git", rev = "5e9486c" }
+drvegrd = { git = "ssh://git@bitbucket.org/au-zone/drvegrd-rs.git", rev = "8942618", features = ["can"] }
 async-std = {version = "1.12", features = ["attributes"] }
 cdr = "0.2"
 clap = { version = "4.5", features = ["derive"] }
@@ -21,11 +21,12 @@ env_logger = "0.11"
 serde = "1.0"
 serde_derive = "1.0"
 socketcan = { version = "3.3", features = ["async-std"] }
-unix-ts = "0.6.0"
+unix-ts = "1.0"
 zenoh = "0.10.0-rc"
 zenoh-ros-type = { git = "https://github.com/MaivinAI/zenoh-ros-type", branch = "main" }
 futures = "0.3"
 ndarray = "0.15"
 ndarray-npy = "0.8"
-rerun = "0.14.1"
+rerun = "0.14"
 kanal = "0.1.0-pre8"
+libc = "0.2"

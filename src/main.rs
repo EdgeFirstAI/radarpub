@@ -1,12 +1,18 @@
-use async_std::net::UdpSocket;
-use async_std::task::block_on;
+use async_std::{net::UdpSocket, task::block_on};
 use cdr::{CdrLe, Infinite};
 use clap::Parser;
-use drvegrd::{eth::RadarCubeReader, load_data, read_frame, Packet};
-use log::{error, trace};
-use socketcan::{async_std::CanSocket, CanFrame, EmbeddedFrame, Id as CanId};
-use std::{error::Error, f32::consts::PI, str::FromStr as _, sync::Arc, thread, time::SystemTime};
-use kanal::{AsyncSender as Sender, bounded_async as channel};
+use drvegrd::{can::read_message, eth::RadarCubeReader};
+use kanal::{bounded_async as channel, AsyncSender as Sender};
+use log::{debug, error, trace, warn};
+use socketcan::async_std::CanSocket;
+use std::{
+    error::Error,
+    f32::consts::PI,
+    str::FromStr as _,
+    sync::Arc,
+    thread,
+    time::{Instant, SystemTime},
+};
 use unix_ts::Timestamp;
 use zenoh::{config::Config, prelude::r#async::*};
 use zenoh_ros_type::{
@@ -60,6 +66,78 @@ struct Args {
     center_doppler: bool,
 }
 
+/// The port5 implementation on Linux uses the recvmmsg system call to enable
+/// bulk reads of UDP packets.  This is not available on other platforms.
+#[cfg(target_os = "linux")]
+async fn port5(tx: Sender<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
+    use std::os::fd::AsRawFd;
+
+    const VLEN: usize = 50;
+    const BUFLEN: usize = 1500;
+    const RETRY_TIME: std::time::Duration = std::time::Duration::from_micros(250);
+
+    let mut vlen_history = [0; 1000];
+    let mut vlen_index = 0;
+
+    let sock = UdpSocket::bind("0.0.0.0:50005").await.unwrap();
+    let mut mmsgs: [libc::mmsghdr; VLEN] = unsafe { std::mem::zeroed() };
+    let mut iovecs: [libc::iovec; VLEN] = unsafe { std::mem::zeroed() };
+    let mut bufs: [[u8; BUFLEN]; VLEN] = [[0; BUFLEN]; VLEN];
+
+    loop {
+        for i in 0..VLEN {
+            iovecs[i].iov_base = bufs[i].as_mut_ptr() as *mut libc::c_void;
+            iovecs[i].iov_len = BUFLEN;
+            mmsgs[i].msg_hdr.msg_iov = &mut iovecs[i];
+            mmsgs[i].msg_hdr.msg_iovlen = 1;
+            mmsgs[i].msg_hdr.msg_name = std::ptr::null_mut();
+            mmsgs[i].msg_hdr.msg_namelen = 0;
+            mmsgs[i].msg_hdr.msg_control = std::ptr::null_mut();
+            mmsgs[i].msg_hdr.msg_controllen = 0;
+            mmsgs[i].msg_hdr.msg_flags = 0;
+            mmsgs[i].msg_len = 0;
+        }
+
+        match unsafe {
+            libc::recvmmsg(
+                sock.as_raw_fd(),
+                mmsgs.as_mut_ptr(),
+                VLEN as u32,
+                0,
+                std::ptr::null_mut(),
+            )
+        } {
+            -1 => {
+                let err = std::io::Error::last_os_error();
+                match err.kind() {
+                    std::io::ErrorKind::Interrupted => (),
+                    std::io::ErrorKind::WouldBlock => thread::sleep(RETRY_TIME),
+                    _ => error!("port5 error: {:?}", err),
+                }
+            }
+            n => {
+                vlen_history[vlen_index] = n;
+                vlen_index += 1;
+                if vlen_index == vlen_history.len() {
+                    vlen_index = 0;
+                    let avg = vlen_history.iter().sum::<i32>() / vlen_history.len() as i32;
+                    let min = vlen_history.iter().min().unwrap();
+                    let max = vlen_history.iter().max().unwrap();
+                    trace!("recvmmsg avg={} min={} max={}", avg, min, max);
+                }
+
+                for buf in bufs.iter().take(n as usize) {
+                    match tx.send(buf.to_vec()).await {
+                        Ok(_) => (),
+                        Err(e) => error!("port5 error: {:?}", e),
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
 async fn port5(tx: Sender<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
     let sock = UdpSocket::bind("0.0.0.0:50005").await.unwrap();
     let mut buf = [0; 1500];
@@ -108,6 +186,11 @@ async fn udp_loop(
 
     let mut reader = RadarCubeReader::default();
 
+    let mut cube_times = [0; 1080];
+    let mut cube_index = 0;
+    let mut dropped = 0;
+    let mut prev_time = Instant::now();
+
     loop {
         let msg = match rx.recv().await {
             Ok(msg) => msg,
@@ -119,9 +202,51 @@ async fn udp_loop(
 
         match reader.read(&msg, center_doppler) {
             Ok(Some(cubemsg)) => {
-                let ts: Timestamp = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)?
-                    .into();
+                cube_times[cube_index] = prev_time.elapsed().as_millis() as i32;
+                prev_time = Instant::now();
+                cube_index += 1;
+
+                if cube_index == cube_times.len() {
+                    cube_index = 0;
+                    let avg = cube_times.iter().sum::<i32>() / cube_times.len() as i32;
+                    let min = cube_times.iter().min().unwrap();
+                    let max = cube_times.iter().max().unwrap();
+                    let fps = 1000.0 / (avg as f32);
+                    let droprate = (dropped as f32) / cube_times.len() as f32;
+                    dropped = 0;
+
+                    if droprate > 0.05 {
+                        error!(
+                            "cube fps={} avg={} min={} max={} droprate={:.2}%",
+                            fps,
+                            avg,
+                            min,
+                            max,
+                            droprate * 100.0
+                        );
+                    } else if droprate > 0.025 {
+                        warn!(
+                            "cube fps={} avg={} min={} max={} droprate={:.2}%",
+                            fps,
+                            avg,
+                            min,
+                            max,
+                            droprate * 100.0
+                        );
+                    } else {
+                        debug!(
+                            "cube fps={} avg={} min={} max={} droprate={:.2}%",
+                            fps,
+                            avg,
+                            min,
+                            max,
+                            droprate * 100.0
+                        );
+                    }
+                }
+
+                let ts = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?;
+                let ts = Timestamp::from_nanos(ts.as_nanos() as i128);
 
                 let layout = vec![
                     edgefirst_msgs::radar_cube_dimension::SEQUENCE,
@@ -183,7 +308,16 @@ async fn udp_loop(
                 }
             }
             Ok(None) => (),
-            Err(err) => error!("Cube Error: {:?}", err),
+            Err(err) => {
+                // Ignore errors related to dropped packets.  We do measure the
+                // rate of dropped packets for logging purposes.
+                dropped += 1;
+                match err {
+                    drvegrd::eth::SMSError::MissingCubeData(_, _) => (),
+                    drvegrd::eth::SMSError::CubeHeaderMissing => (),
+                    _ => error!("Cube Error: {:?}", err),
+                }
+            }
         }
     }
 }
@@ -221,7 +355,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         })?;
 
     loop {
-        match read_frame(read_packet, &sock) {
+        match read_message(&sock).await {
             Err(err) => println!("Error: {:?}", err),
             Ok(frame) => {
                 trace!(
@@ -287,9 +421,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     },
                 ];
 
-                let ts: Timestamp = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)?
-                    .into();
+                let ts = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?;
+                let ts = Timestamp::from_nanos(ts.as_nanos() as i128);
+
                 let msg = PointCloud2 {
                     header: zenoh_ros_type::std_msgs::Header {
                         stamp: ROSTime {
@@ -326,33 +460,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 }
 
-fn read_packet(can: &CanSocket) -> Result<Packet, drvegrd::Error> {
-    match block_on(can.read_frame()) {
-        Ok(CanFrame::Data(frame)) => {
-            let id = match frame.id() {
-                CanId::Standard(id) => id.as_raw() as u32,
-                CanId::Extended(id) => id.as_raw(),
-            };
-            Ok(Packet {
-                id,
-                data: load_data(frame.data()),
-            })
-        }
-        Ok(CanFrame::Remote(frame)) => panic!("Unexpected remote frame: {:?}", frame),
-        Ok(CanFrame::Error(frame)) => panic!("Unexpected error frame: {:?}", frame),
-        Err(err) => Err(drvegrd::Error::Io(err)),
-    }
-}
-
 fn transform_xyz(range: f32, azimuth: f32, elevation: f32, mirror: bool) -> [f32; 3] {
     let azi = azimuth / 180.0 * PI;
     let ele = elevation / 180.0 * PI;
     let x = range * ele.cos() * azi.cos();
     let y = range * ele.cos() * azi.sin();
     let z = range * ele.sin();
-    if mirror {
-        [x, -y, z]
-    } else {
-        [x, y, z]
-    }
+    if mirror { [x, -y, z] } else { [x, y, z] }
 }
