@@ -15,8 +15,8 @@ use std::{
 };
 use unix_ts::Timestamp;
 use zenoh::{config::Config, prelude::r#async::*};
-use zenoh_ros_type::{
-    common_interfaces::sensor_msgs::{PointCloud2, PointField},
+use edgefirst_schemas::{
+    common_interfaces::{self, sensor_msgs::{PointCloud2, PointField}},
     edgefirst_msgs,
     rcl_interfaces::builtin_interfaces::Time as ROSTime,
 };
@@ -250,7 +250,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let ts = Timestamp::from_nanos(ts.as_nanos() as i128);
 
                 let msg = PointCloud2 {
-                    header: zenoh_ros_type::std_msgs::Header {
+                    header: common_interfaces::std_msgs::Header {
                         stamp: ROSTime {
                             sec: ts.seconds() as i32,
                             nanosec: ts.subsec(9),
@@ -407,15 +407,14 @@ async fn udp_loop(ctx: Context) -> Result<(), Box<dyn std::error::Error>> {
                 std::mem::forget(data);
 
                 let msg = edgefirst_msgs::RadarCube {
-                    header: zenoh_ros_type::std_msgs::Header {
+                    header: common_interfaces::std_msgs::Header {
                         stamp: ROSTime {
                             sec: ts.seconds() as i32,
                             nanosec: ts.subsec(9),
                         },
-                        frame_id: "".to_string(),
+                        frame_id: cubemsg.frame_counter.to_string(),
                     },
                     timestamp: cubemsg.timestamp,
-                    frame_id: cubemsg.frame_counter,
                     layout,
                     shape,
                     scales: vec![

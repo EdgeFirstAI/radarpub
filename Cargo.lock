@@ -1685,6 +1685,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "edgefirst-schemas"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41df488d75376b5781046c56c32e71239f58a3c6db546d402c81e358c0c08308"
+dependencies = [
+ "serde",
+ "serde_derive",
+]
+
+[[package]]
 name = "eframe"
 version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4640,6 +4650,7 @@ dependencies = [
  "cdr",
  "clap 4.5.3",
  "drvegrd",
+ "edgefirst-schemas",
  "env_logger 0.11.3",
  "futures",
  "kanal",
@@ -4652,7 +4663,6 @@ dependencies = [
  "socketcan",
  "unix-ts",
  "zenoh",
- "zenoh-ros-type",
 ]
 
 [[package]]
@@ -9407,15 +9417,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be195cbe1930507af3a43fb9f67fbb85a4cc1cf84fda347b8f2512683d5b975b"
 dependencies = [
  "anyhow",
-]
-
-[[package]]
-name = "zenoh-ros-type"
-version = "0.3.3"
-source = "git+https://github.com/MaivinAI/zenoh-ros-type?branch=main#fedd79f45f524bd574145a81e2c0b219cd4cf3a2"
-dependencies = [
- "serde",
- "serde_derive",
 ]
 
 [[package]]
