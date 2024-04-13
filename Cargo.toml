@@ -9,11 +9,17 @@ edition = "2021"
 [profile.release]
 opt-level = 3
 lto = true
+strip = true
+debug = false
+
+[profile.profiling]
+inherits = "release"
+strip = false
 debug = true
 
 [dependencies]
-drvegrd = { git = "ssh://git@bitbucket.org/au-zone/drvegrd-rs.git", rev = "8942618", features = ["can"] }
-async-std = {version = "1.12", features = ["attributes"] }
+drvegrd = { git = "ssh://git@bitbucket.org/au-zone/drvegrd-rs.git", rev = "d434208", features = [ "can" ] }
+async-std = { version = "1.12", features = ["attributes"] }
 cdr = "0.2"
 clap = { version = "4.5", features = ["derive"] }
 log = "0.4"
@@ -26,7 +32,9 @@ zenoh = "0.10.0-rc"
 zenoh-ros-type = { git = "https://github.com/MaivinAI/zenoh-ros-type", branch = "main" }
 futures = "0.3"
 ndarray = "0.15"
-ndarray-npy = "0.8"
-rerun = "0.14"
 kanal = "0.1.0-pre8"
 libc = "0.2"
+rerun = { version = "0.15", optional = true }
+
+[features]
+rerun = ["dep:rerun"]
