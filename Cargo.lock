@@ -1636,8 +1636,8 @@ checksum = "9ea835d29036a4087793836fa931b08837ad5e957da9e23886b29586fb9b6650"
 
 [[package]]
 name = "drvegrd"
-version = "1.1.0"
-source = "git+ssh://git@bitbucket.org/au-zone/drvegrd-rs.git?rev=d434208#d4342086454671919aed3a4e7e440603f72d4324"
+version = "1.2.0"
+source = "git+ssh://git@bitbucket.org/au-zone/drvegrd-rs.git?rev=212a30e#212a30e48095de20ad27c8fe1d70a2f18813e683"
 dependencies = [
  "async-std",
  "cdr",
@@ -1686,9 +1686,9 @@ dependencies = [
 
 [[package]]
 name = "edgefirst-schemas"
-version = "1.0.1"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41df488d75376b5781046c56c32e71239f58a3c6db546d402c81e358c0c08308"
+checksum = "0afd1dc76eec1ba8a2bd0ed1a1a35aaa1eb38be6d49f9ba628b8df9ca36b2fdd"
 dependencies = [
  "serde",
  "serde_derive",

@@ -18,8 +18,8 @@ strip = false
 debug = true
 
 [dependencies]
-drvegrd = { git = "ssh://git@bitbucket.org/au-zone/drvegrd-rs.git", rev = "d434208", features = [ "can" ] }
-edgefirst-schemas = "1.0.1"
+drvegrd = { git = "ssh://git@bitbucket.org/au-zone/drvegrd-rs.git", rev = "212a30e", features = [ "can" ] }
+edgefirst-schemas = "1.1"
 async-std = { version = "1.12", features = ["attributes"] }
 cdr = "0.2"
 clap = { version = "4.5", features = ["derive"] }

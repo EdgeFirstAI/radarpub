@@ -2,6 +2,12 @@ use async_std::{net::UdpSocket, task::block_on};
 use cdr::{CdrLe, Infinite};
 use clap::Parser;
 use drvegrd::{can::read_message, eth::RadarCubeReader};
+use edgefirst_schemas::{
+    builtin_interfaces::Time as ROSTime,
+    edgefirst_msgs,
+    sensor_msgs::{PointCloud2, PointField},
+    std_msgs,
+};
 use kanal::{bounded_async as channel, AsyncSender as Sender};
 use log::{debug, error, trace, warn};
 use socketcan::async_std::CanSocket;
@@ -15,11 +21,6 @@ use std::{
 };
 use unix_ts::Timestamp;
 use zenoh::{config::Config, prelude::r#async::*};
-use edgefirst_schemas::{
-    common_interfaces::{self, sensor_msgs::{PointCloud2, PointField}},
-    edgefirst_msgs,
-    rcl_interfaces::builtin_interfaces::Time as ROSTime,
-};
 
 #[cfg(feature = "rerun")]
 use rerun::{external::re_sdk_comms::DEFAULT_SERVER_PORT, Points3D};
@@ -250,7 +251,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let ts = Timestamp::from_nanos(ts.as_nanos() as i128);
 
                 let msg = PointCloud2 {
-                    header: common_interfaces::std_msgs::Header {
+                    header: std_msgs::Header {
                         stamp: ROSTime {
                             sec: ts.seconds() as i32,
                             nanosec: ts.subsec(9),
@@ -407,7 +408,7 @@ async fn udp_loop(ctx: Context) -> Result<(), Box<dyn std::error::Error>> {
                 std::mem::forget(data);
 
                 let msg = edgefirst_msgs::RadarCube {
-                    header: common_interfaces::std_msgs::Header {
+                    header: std_msgs::Header {
                         stamp: ROSTime {
                             sec: ts.seconds() as i32,
                             nanosec: ts.subsec(9),
@@ -428,11 +429,12 @@ async fn udp_loop(ctx: Context) -> Result<(), Box<dyn std::error::Error>> {
 
                 let encoded = cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?;
 
-                match ctx.session
+                match ctx
+                    .session
                     .put(&ctx.topic, encoded)
                     .encoding(Encoding::WithSuffix(
                         KnownEncoding::AppOctetStream,
-                        "sensor_msgs/msg/RadCube".into(),
+                        "edgefirst_msgs/msg/RadarCube".into(),
                     ))
                     .res()
                     .await
@@ -586,11 +588,7 @@ fn transform_xyz(range: f32, azimuth: f32, elevation: f32, mirror: bool) -> [f32
     let x = range * ele.cos() * azi.cos();
     let y = range * ele.cos() * azi.sin();
     let z = range * ele.sin();
-    if mirror {
-        [x, -y, z]
-    } else {
-        [x, y, z]
-    }
+    if mirror { [x, -y, z] } else { [x, y, z] }
 }
 
 #[cfg(feature = "rerun")]
