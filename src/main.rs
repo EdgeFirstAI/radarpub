@@ -379,7 +379,20 @@ async fn udp_loop(ctx: Context) -> Result<(), Box<dyn std::error::Error>> {
                         let data = data.mapv(|x| x.re.abs());
                         let tensor = rerun::Tensor::try_from(data)?;
 
-                        rr.log("cube", &tensor)?
+                        rr.log("cube", &tensor)?;
+
+                        rr.log(
+                            "cube/speed_per_bin",
+                            &rerun::Scalar::new(cubemsg.bin_properties.speed_per_bin as f64),
+                        )?;
+                        rr.log(
+                            "cube/range_per_bin",
+                            &rerun::Scalar::new(cubemsg.bin_properties.range_per_bin as f64),
+                        )?;
+                        rr.log(
+                            "cube/bin_per_speed",
+                            &rerun::Scalar::new(cubemsg.bin_properties.bin_per_speed as f64),
+                        )?;
                     }
                     None => (),
                 }
@@ -445,14 +458,8 @@ async fn udp_loop(ctx: Context) -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(None) => (),
             Err(err) => {
-                // Ignore errors related to dropped packets.  We do measure the
-                // rate of dropped packets for logging purposes.
                 dropped += 1;
-                match err {
-                    drvegrd::eth::SMSError::MissingCubeData(_, _) => (),
-                    drvegrd::eth::SMSError::CubeHeaderMissing => (),
-                    _ => error!("Cube Error: {:?}", err),
-                }
+                error!("Cube Error: {:?}", err);
             }
         }
     }
@@ -462,7 +469,8 @@ async fn udp_loop(ctx: Context) -> Result<(), Box<dyn std::error::Error>> {
 /// bulk reads of UDP packets.  This is not available on other platforms.
 #[cfg(target_os = "linux")]
 async fn port5(tx: Sender<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
-    use std::{os::fd::AsRawFd, time::Duration};
+    use libc::{sched_param, SCHED_FIFO};
+    use std::{mem, os::fd::AsRawFd, time::Duration};
 
     const VLEN: usize = 50;
     const BUFLEN: usize = 1500;
@@ -495,7 +503,34 @@ async fn port5(tx: Sender<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
     ];
     let mut bufs = vec![[0; BUFLEN]; VLEN];
 
+    let mut param = sched_param { sched_priority: 10 };
+    let pid = unsafe { libc::pthread_self() };
+    let err =
+        unsafe { libc::pthread_setschedparam(pid, SCHED_FIFO, &mut param as *mut sched_param) };
+    if err != 0 {
+        let err = std::io::Error::last_os_error();
+        warn!("unable to set port5 real-time fifo scheduler: {}", err);
+    }
+
     let sock = UdpSocket::bind("0.0.0.0:50005").await.unwrap();
+
+    let maxbuf: libc::c_int = 2 * 1024 * 1024;
+    let err = unsafe {
+        libc::setsockopt(
+            sock.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_RCVBUFFORCE,
+            &maxbuf as *const _ as *const libc::c_void,
+            mem::size_of_val(&maxbuf) as libc::socklen_t,
+        )
+    };
+    if err != 0 {
+        let err = std::io::Error::last_os_error();
+        warn!(
+            "unable to set port5 socket buffer size to {}: {}",
+            maxbuf, err
+        );
+    }
 
     loop {
         for i in 0..VLEN {

@@ -18,7 +18,7 @@ strip = false
 debug = true
 
 [dependencies]
-drvegrd = { git = "ssh://git@bitbucket.org/au-zone/drvegrd-rs.git", rev = "212a30e", features = [ "can" ] }
+drvegrd = { git = "ssh://git@bitbucket.org/au-zone/drvegrd-rs.git", tag = "1.3.2", features = [ "can" ] }
 edgefirst-schemas = "1.1"
 async-std = { version = "1.12", features = ["attributes"] }
 cdr = "0.2"
@@ -32,7 +32,7 @@ unix-ts = "1.0"
 zenoh = "0.10.0-rc"
 futures = "0.3"
 ndarray = "0.15"
-kanal = "0.1.0-pre8"
+kanal = { git = "https://github.com/fereidani/kanal", rev = "125fb78" }
 libc = "0.2"
 rerun = { version = "0.15", optional = true }
 
