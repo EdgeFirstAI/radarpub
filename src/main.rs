@@ -2,24 +2,11 @@ use async_std::{net::UdpSocket, task::block_on};
 use cdr::{CdrLe, Infinite};
 use clap::Parser;
 use drvegrd::{can::read_message, eth::RadarCubeReader};
-use edgefirst_schemas::{
-    builtin_interfaces::Time as ROSTime,
-    edgefirst_msgs,
-    sensor_msgs::{PointCloud2, PointField},
-    std_msgs,
-};
+use edgefirst_schemas::{builtin_interfaces, edgefirst_msgs, sensor_msgs, std_msgs};
 use kanal::{bounded_async as channel, AsyncSender as Sender};
 use log::{debug, error, trace, warn};
 use socketcan::async_std::CanSocket;
-use std::{
-    error::Error,
-    f32::consts::PI,
-    str::FromStr as _,
-    sync::Arc,
-    thread,
-    time::{Instant, SystemTime},
-};
-use unix_ts::Timestamp;
+use std::{error::Error, f32::consts::PI, str::FromStr as _, sync::Arc, thread, time::Instant};
 use zenoh::{config::Config, prelude::r#async::*};
 
 #[cfg(feature = "rerun")]
@@ -209,37 +196,37 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .flat_map(|elem| elem.to_ne_bytes())
                     .collect();
                 let fields = vec![
-                    PointField {
+                    sensor_msgs::PointField {
                         name: String::from("x"),
                         offset: 0,
                         datatype: PointFieldType::FLOAT32 as u8,
                         count: 1,
                     },
-                    PointField {
+                    sensor_msgs::PointField {
                         name: String::from("y"),
                         offset: 4,
                         datatype: PointFieldType::FLOAT32 as u8,
                         count: 1,
                     },
-                    PointField {
+                    sensor_msgs::PointField {
                         name: String::from("z"),
                         offset: 8,
                         datatype: PointFieldType::FLOAT32 as u8,
                         count: 1,
                     },
-                    PointField {
+                    sensor_msgs::PointField {
                         name: String::from("speed"),
                         offset: 12,
                         datatype: PointFieldType::FLOAT32 as u8,
                         count: 1,
                     },
-                    PointField {
+                    sensor_msgs::PointField {
                         name: String::from("power"),
                         offset: 16,
                         datatype: PointFieldType::FLOAT32 as u8,
                         count: 1,
                     },
-                    PointField {
+                    sensor_msgs::PointField {
                         name: String::from("rcs"),
                         offset: 20,
                         datatype: PointFieldType::FLOAT32 as u8,
@@ -247,16 +234,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     },
                 ];
 
-                let ts = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?;
-                let ts = Timestamp::from_nanos(ts.as_nanos() as i128);
-
-                let msg = PointCloud2 {
+                let msg = sensor_msgs::PointCloud2 {
                     header: std_msgs::Header {
-                        stamp: ROSTime {
-                            sec: ts.seconds() as i32,
-                            nanosec: ts.subsec(9),
-                        },
-                        frame_id: "".to_string(),
+                        stamp: timestamp()?,
+                        frame_id: frame.header.cycle_counter.to_string(),
                     },
                     height: 1,
                     width: frame.header.n_targets as u32,
@@ -361,9 +342,6 @@ async fn udp_loop(ctx: Context) -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                let ts = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?;
-                let ts = Timestamp::from_nanos(ts.as_nanos() as i128);
-
                 #[cfg(feature = "rerun")]
                 match &ctx.rr {
                     Some(rr) => {
@@ -422,10 +400,7 @@ async fn udp_loop(ctx: Context) -> Result<(), Box<dyn std::error::Error>> {
 
                 let msg = edgefirst_msgs::RadarCube {
                     header: std_msgs::Header {
-                        stamp: ROSTime {
-                            sec: ts.seconds() as i32,
-                            nanosec: ts.subsec(9),
-                        },
+                        stamp: timestamp()?,
                         frame_id: cubemsg.frame_counter.to_string(),
                     },
                     timestamp: cubemsg.timestamp,
@@ -644,4 +619,20 @@ fn colormap_viridis_srgb(t: f32) -> [u8; 4] {
 
     let c = c * 255.0;
     [c.x as u8, c.y as u8, c.z as u8, 255]
+}
+
+fn timestamp() -> Result<builtin_interfaces::Time, std::io::Error> {
+    let mut tp = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    let err = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC_RAW, &mut tp) };
+    if err != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    Ok(builtin_interfaces::Time {
+        sec: tp.tv_sec as i32,
+        nanosec: tp.tv_nsec as u32,
+    })
 }
