@@ -2,15 +2,31 @@ use async_std::{net::UdpSocket, task::block_on};
 use cdr::{CdrLe, Infinite};
 use clap::Parser;
 use drvegrd::{can::read_message, eth::RadarCubeReader};
-use edgefirst_schemas::{builtin_interfaces, edgefirst_msgs, sensor_msgs, std_msgs};
+use edgefirst_schemas::{
+    builtin_interfaces,
+    builtin_interfaces::Time,
+    edgefirst_msgs,
+    geometry_msgs::{Quaternion, Transform, TransformStamped, Vector3},
+    sensor_msgs, std_msgs,
+    std_msgs::Header,
+};
 use kanal::{bounded_async as channel, AsyncSender as Sender};
 use log::{debug, error, trace, warn};
-use socketcan::async_std::CanSocket;
-use std::{error::Error, f32::consts::PI, str::FromStr as _, sync::Arc, thread, time::Instant};
-use zenoh::{config::Config, prelude::r#async::*};
-
 #[cfg(feature = "rerun")]
 use rerun::{external::re_sdk_comms::DEFAULT_SERVER_PORT, Points3D};
+use socketcan::async_std::CanSocket;
+use std::{
+    error::Error,
+    f32::consts::PI,
+    str::FromStr as _,
+    sync::Arc,
+    thread::{self, sleep},
+    time::{Duration, Instant},
+};
+use zenoh::{
+    config::Config,
+    prelude::{r#async::*, sync::SyncResolve},
+};
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -52,6 +68,34 @@ struct Args {
     #[arg(long)]
     mirror: bool,
 
+    /// radar frame transform vector from base_link
+    #[arg(
+        long,
+        env,
+        default_value = "0 0 0",
+        value_delimiter = ' ',
+        num_args = 3
+    )]
+    radar_tf_vec: Vec<f64>,
+
+    /// radar frame transform quaternion from base_link
+    #[arg(
+        long,
+        env,
+        default_value = "0 0 0 1",
+        value_delimiter = ' ',
+        num_args = 4
+    )]
+    radar_tf_quat: Vec<f64>,
+
+    /// The name of the base frame
+    #[arg(long, default_value = "base_link")]
+    base_frame_id: String,
+
+    /// The name of the radar frame
+    #[arg(long, default_value = "radar")]
+    radar_frame_id: String,
+
     /// connect to remote rerun viewer at this address
     #[cfg(feature = "rerun")]
     #[arg(short, long)]
@@ -71,6 +115,7 @@ struct Args {
 struct Context {
     session: Arc<Session>,
     topic: String,
+    radar_frame_id: String,
 
     #[cfg(feature = "rerun")]
     rr: Option<rerun::RecordingStream>,
@@ -107,10 +152,46 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let ctx = Context {
         session: session.clone(),
-        topic: args.cube_topic,
+        topic: args.cube_topic.clone(),
+        radar_frame_id: args.radar_frame_id.clone(),
         #[cfg(feature = "rerun")]
         rr: rr.clone(),
     };
+
+    let publ_tf = match session
+        .declare_publisher("rt/tf_static".to_string())
+        .priority(Priority::Background)
+        .congestion_control(CongestionControl::Drop)
+        .res_async()
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            error!(
+                "Error while declaring tf_static publisher rt/tf_static: {:?}",
+                e
+            );
+            return Err(e);
+        }
+    };
+
+    let tf_msg = build_tf_msg(&args);
+    let tf_msg = Value::from(cdr::serialize::<_, _, CdrLe>(&tf_msg, Infinite)?).encoding(
+        Encoding::WithSuffix(
+            KnownEncoding::AppOctetStream,
+            "geometry_msgs/msg/TransformStamped".into(),
+        ),
+    );
+    thread::spawn(move || {
+        let interval = Duration::from_secs(1);
+        let mut target_time = Instant::now() + interval;
+        loop {
+            publ_tf.put(tf_msg.clone()).res_sync().unwrap();
+            trace!("Send to tf topic rt/tf_static");
+            sleep(target_time.duration_since(Instant::now()));
+            target_time += interval
+        }
+    });
 
     thread::Builder::new()
         .name("radarcube".to_string())
@@ -144,10 +225,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                 trace!(
                     "Processing radar frame with {} targets min={} max={} avg={}",
-                    frame.header.n_targets,
-                    min,
-                    max,
-                    avg
+                    frame.header.n_targets, min, max, avg
                 );
 
                 #[cfg(feature = "rerun")]
@@ -237,7 +315,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let msg = sensor_msgs::PointCloud2 {
                     header: std_msgs::Header {
                         stamp: timestamp()?,
-                        frame_id: frame.header.cycle_counter.to_string(),
+                        frame_id: args.radar_frame_id.clone(),
                     },
                     height: 1,
                     width: frame.header.n_targets as u32,
@@ -256,7 +334,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         KnownEncoding::AppOctetStream,
                         "sensor_msgs/msg/PointCloud2".into(),
                     ))
-                    .res()
+                    .res_async()
                     .await
                 {
                     Ok(_) => trace!("PointCloud2 Message Sent"),
@@ -401,7 +479,7 @@ async fn udp_loop(ctx: Context) -> Result<(), Box<dyn std::error::Error>> {
                 let msg = edgefirst_msgs::RadarCube {
                     header: std_msgs::Header {
                         stamp: timestamp()?,
-                        frame_id: cubemsg.frame_counter.to_string(),
+                        frame_id: ctx.radar_frame_id.clone(),
                     },
                     timestamp: cubemsg.timestamp,
                     layout,
@@ -424,7 +502,7 @@ async fn udp_loop(ctx: Context) -> Result<(), Box<dyn std::error::Error>> {
                         KnownEncoding::AppOctetStream,
                         "edgefirst_msgs/msg/RadarCube".into(),
                     ))
-                    .res()
+                    .res_async()
                     .await
                 {
                     Ok(_) => trace!("RadarCube Message Sent"),
@@ -619,6 +697,29 @@ fn colormap_viridis_srgb(t: f32) -> [u8; 4] {
 
     let c = c * 255.0;
     [c.x as u8, c.y as u8, c.z as u8, 255]
+}
+
+fn build_tf_msg(args: &Args) -> TransformStamped {
+    TransformStamped {
+        header: Header {
+            frame_id: args.base_frame_id.clone(),
+            stamp: timestamp().unwrap_or(Time { sec: 0, nanosec: 0 }),
+        },
+        child_frame_id: args.radar_frame_id.clone(),
+        transform: Transform {
+            translation: Vector3 {
+                x: args.radar_tf_vec[0],
+                y: args.radar_tf_vec[1],
+                z: args.radar_tf_vec[2],
+            },
+            rotation: Quaternion {
+                x: args.radar_tf_quat[0],
+                y: args.radar_tf_quat[1],
+                z: args.radar_tf_quat[2],
+                w: args.radar_tf_quat[3],
+            },
+        },
+    }
 }
 
 fn timestamp() -> Result<builtin_interfaces::Time, std::io::Error> {
