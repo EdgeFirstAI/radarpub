@@ -22,19 +22,19 @@ drvegrd = { git = "ssh://git@bitbucket.org/au-zone/drvegrd-rs.git", tag = "1.3.2
 edgefirst-schemas = "1.1"
 async-std = { version = "1.12", features = ["attributes"] }
 cdr = "0.2"
-clap = { version = "4.5", features = ["derive"] }
-log = "0.4"
-env_logger = "0.11"
+clap = { version = "4.5", features = ["derive", "env"] }
+log = "0.4.22"
+env_logger = "0.11.5"
 serde = "1.0"
 serde_derive = "1.0"
 socketcan = { version = "3.3", features = ["async-std"] }
 unix-ts = "1.0"
 zenoh = "0.10.0-rc"
 futures = "0.3"
-ndarray = "0.15"
+ndarray = "0.16.1"
 kanal = { git = "https://github.com/fereidani/kanal", rev = "125fb78" }
 libc = "0.2"
-rerun = { version = "0.15", optional = true }
+rerun = { version = "0.18.2", optional = true }
 
 [features]
 rerun = ["dep:rerun"]
