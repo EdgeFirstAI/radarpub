@@ -1,7 +1,10 @@
 use async_std::{net::UdpSocket, task::block_on};
 use cdr::{CdrLe, Infinite};
-use clap::Parser;
-use drvegrd::{can::read_message, eth::RadarCubeReader};
+use clap::{Parser, ValueEnum};
+use drvegrd::{
+    can::{read_message, write_parameter, Parameter},
+    eth::RadarCubeReader,
+};
 use edgefirst_schemas::{
     builtin_interfaces,
     builtin_interfaces::Time,
@@ -16,8 +19,8 @@ use log::{debug, error, trace, warn};
 use rerun::{external::re_sdk_comms::DEFAULT_SERVER_PORT, Points3D};
 use socketcan::async_std::CanSocket;
 use std::{
-    error::Error,
     f32::consts::PI,
+    fmt, io,
     str::FromStr as _,
     sync::Arc,
     thread::{self, sleep},
@@ -39,6 +42,136 @@ pub enum PointFieldType {
     UINT32 = 6,
     FLOAT32 = 7,
     FLOAT64 = 8,
+}
+
+#[derive(Debug)]
+enum Error {
+    Io(io::Error),
+    InvalidCenterFrequency(u32),
+    InvalidFrequencySweep(u32),
+    InvalidRangeToggle(u32),
+    InvalidDetectionSensitivity(u32),
+}
+
+impl std::error::Error for Error {}
+
+impl From<io::Error> for Error {
+    fn from(err: io::Error) -> Error {
+        Error::Io(err)
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Error::Io(err) => write!(f, "io error: {}", err),
+            Error::InvalidCenterFrequency(value) => {
+                write!(f, "invalid center frequency: {}", value)
+            }
+            Error::InvalidFrequencySweep(value) => write!(f, "invalid frequency sweep: {}", value),
+            Error::InvalidRangeToggle(value) => write!(f, "invalid range toggle: {}", value),
+            Error::InvalidDetectionSensitivity(value) => {
+                write!(f, "invalid detection sensitivity: {}", value)
+            }
+        }
+    }
+}
+
+/// The center frequency for the radar.
+/// Note: ultra-short range is only supported with the low center frequency.
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum CenterFrequency {
+    Low = 0,
+    Medium = 1,
+    High = 2,
+}
+
+impl TryFrom<u32> for CenterFrequency {
+    type Error = Error;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(CenterFrequency::Low),
+            1 => Ok(CenterFrequency::Medium),
+            2 => Ok(CenterFrequency::High),
+            _ => Err(Error::InvalidCenterFrequency(value)),
+        }
+    }
+}
+
+/// The frequency sweep which controls the range of the radar.
+/// Note: ultra-short range is only supported with the low center frequency.
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum FrequencySweep {
+    Long = 0,
+    Medium = 1,
+    Short = 2,
+    UltraShort = 3,
+}
+
+impl TryFrom<u32> for FrequencySweep {
+    type Error = Error;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(FrequencySweep::Long),
+            1 => Ok(FrequencySweep::Medium),
+            2 => Ok(FrequencySweep::Short),
+            3 => Ok(FrequencySweep::UltraShort),
+            _ => Err(Error::InvalidFrequencySweep(value)),
+        }
+    }
+}
+
+/// The range toggle mode allows the radar to alternate between various
+/// frequency sweeps at runtime.
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum RangeToggle {
+    Off = 0,
+    ShortMedium = 1,
+    ShortLong = 2,
+    MediumLong = 3,
+    LongUltraShort = 4,
+    MediumUltraShort = 5,
+    ShortUltraShort = 6,
+}
+
+impl TryFrom<u32> for RangeToggle {
+    type Error = Error;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(RangeToggle::Off),
+            1 => Ok(RangeToggle::ShortMedium),
+            2 => Ok(RangeToggle::ShortLong),
+            3 => Ok(RangeToggle::MediumLong),
+            4 => Ok(RangeToggle::LongUltraShort),
+            5 => Ok(RangeToggle::MediumUltraShort),
+            6 => Ok(RangeToggle::ShortUltraShort),
+            _ => Err(Error::InvalidRangeToggle(value)),
+        }
+    }
+}
+
+/// The detection sensitivity controls the radar's ability to detect targets.
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum DetectionSensitivity {
+    Low = 0,
+    Medium = 1,
+    High = 2,
+}
+
+impl TryFrom<u32> for DetectionSensitivity {
+    type Error = Error;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(DetectionSensitivity::Low),
+            1 => Ok(DetectionSensitivity::Medium),
+            2 => Ok(DetectionSensitivity::High),
+            _ => Err(Error::InvalidDetectionSensitivity(value)),
+        }
+    }
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -65,7 +198,7 @@ struct Args {
     can: String,
 
     /// mirror the radar data
-    #[arg(long)]
+    #[arg(long, env)]
     mirror: bool,
 
     /// radar frame transform vector from base_link
@@ -89,12 +222,34 @@ struct Args {
     radar_tf_quat: Vec<f64>,
 
     /// The name of the base frame
-    #[arg(long, default_value = "base_link")]
+    #[arg(long, env, default_value = "base_link")]
     base_frame_id: String,
 
     /// The name of the radar frame
-    #[arg(long, default_value = "radar")]
+    #[arg(long, env, default_value = "radar")]
     radar_frame_id: String,
+
+    /// The center frequency for the radar.
+    #[arg(long, env, default_value = "Medium")]
+    center_frequency: CenterFrequency,
+
+    /// The frequency sweep which controls the range of the radar.
+    #[arg(long, env, default_value = "Short")]
+    frequency_sweep: FrequencySweep,
+
+    /// The range toggle mode allows the radar to alternate between various
+    /// frequencies.
+    #[arg(long, env, default_value = "Off")]
+    range_toggle: RangeToggle,
+
+    /// The detection sensitivity controls the radar's ability to detect
+    /// targets.
+    #[arg(long, env, default_value = "Medium")]
+    detection_sensitivity: DetectionSensitivity,
+
+    /// Enable streaming the low-level radar data cube on the cube_topic.
+    #[arg(long, env, default_value = "false")]
+    cube: bool,
 
     /// connect to remote rerun viewer at this address
     #[cfg(feature = "rerun")]
@@ -122,7 +277,7 @@ struct Context {
 }
 
 #[async_std::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     env_logger::init();
 
@@ -149,6 +304,38 @@ async fn main() -> Result<(), Box<dyn Error>> {
     log::info!("Opened Zenoh session");
 
     let sock = CanSocket::open(&args.can)?;
+
+    let center_frequency = write_parameter(
+        &sock,
+        Parameter::CenterFrequency,
+        args.center_frequency as u32,
+    )
+    .await?;
+
+    let frequency_sweep = write_parameter(
+        &sock,
+        Parameter::FrequencySweep,
+        args.frequency_sweep as u32,
+    )
+    .await?;
+
+    let range_toggle =
+        write_parameter(&sock, Parameter::RangeToggle, args.range_toggle as u32).await?;
+
+    let detection_sensitivity = write_parameter(
+        &sock,
+        Parameter::DetectionSensitivity,
+        args.detection_sensitivity as u32,
+    )
+    .await?;
+
+    log::info!(
+        "radar parameters: center_frequency={:?} frequency_sweep={:?} range_toggle={:?} detection_sensitivity={:?}",
+        CenterFrequency::try_from(center_frequency).unwrap(),
+        FrequencySweep::try_from(frequency_sweep).unwrap(),
+        RangeToggle::try_from(range_toggle).unwrap(),
+        DetectionSensitivity::try_from(detection_sensitivity).unwrap()
+    );
 
     let ctx = Context {
         session: session.clone(),
@@ -193,11 +380,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
-    thread::Builder::new()
-        .name("radarcube".to_string())
-        .spawn(move || {
-            block_on(udp_loop(ctx)).unwrap();
-        })?;
+    if args.cube {
+        thread::Builder::new()
+            .name("radarcube".to_string())
+            .spawn(move || {
+                block_on(udp_loop(ctx)).unwrap();
+            })?;
+    }
 
     loop {
         match read_message(&sock).await {
@@ -225,7 +414,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                 trace!(
                     "Processing radar frame with {} targets min={} max={} avg={}",
-                    frame.header.n_targets, min, max, avg
+                    frame.header.n_targets,
+                    min,
+                    max,
+                    avg
                 );
 
                 #[cfg(feature = "rerun")]
@@ -676,7 +868,11 @@ fn transform_xyz(range: f32, azimuth: f32, elevation: f32, mirror: bool) -> [f32
     let x = range * ele.cos() * azi.cos();
     let y = range * ele.cos() * azi.sin();
     let z = range * ele.sin();
-    if mirror { [x, -y, z] } else { [x, y, z] }
+    if mirror {
+        [x, -y, z]
+    } else {
+        [x, y, z]
+    }
 }
 
 #[cfg(feature = "rerun")]
