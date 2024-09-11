@@ -14,7 +14,7 @@ use edgefirst_schemas::{
     std_msgs::Header,
 };
 use kanal::{bounded_async as channel, AsyncSender as Sender};
-use log::{debug, error, trace, warn};
+use log::{debug, error, info, trace, warn};
 #[cfg(feature = "rerun")]
 use rerun::{external::re_sdk_comms::DEFAULT_SERVER_PORT, Points3D};
 use socketcan::async_std::CanSocket;
@@ -230,21 +230,21 @@ struct Args {
     radar_frame_id: String,
 
     /// The center frequency for the radar.
-    #[arg(long, env, default_value = "Medium")]
+    #[arg(long, env, default_value = "medium")]
     center_frequency: CenterFrequency,
 
     /// The frequency sweep which controls the range of the radar.
-    #[arg(long, env, default_value = "Short")]
+    #[arg(long, env, default_value = "short")]
     frequency_sweep: FrequencySweep,
 
     /// The range toggle mode allows the radar to alternate between various
     /// frequencies.
-    #[arg(long, env, default_value = "Off")]
+    #[arg(long, env, default_value = "off")]
     range_toggle: RangeToggle,
 
     /// The detection sensitivity controls the radar's ability to detect
     /// targets.
-    #[arg(long, env, default_value = "Medium")]
+    #[arg(long, env, default_value = "medium")]
     detection_sensitivity: DetectionSensitivity,
 
     /// Enable streaming the low-level radar data cube on the cube_topic.
@@ -301,7 +301,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.connect.endpoints = args.endpoint.iter().map(|v| v.parse().unwrap()).collect();
     let _ = config.scouting.multicast.set_enabled(Some(false));
     let session = zenoh::open(config).res_async().await.unwrap().into_arc();
-    log::info!("Opened Zenoh session");
+    debug!("Opened Zenoh session");
 
     let sock = CanSocket::open(&args.can)?;
 
@@ -329,7 +329,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
 
-    log::info!(
+    info!(
         "radar parameters: center_frequency={:?} frequency_sweep={:?} range_toggle={:?} detection_sensitivity={:?}",
         CenterFrequency::try_from(center_frequency).unwrap(),
         FrequencySweep::try_from(frequency_sweep).unwrap(),
@@ -392,6 +392,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match read_message(&sock).await {
             Err(err) => println!("Error: {:?}", err),
             Ok(frame) => {
+                trace!("Received radar frame: {:?}", frame);
+
                 if frame.header.n_targets == 0 {
                     continue;
                 }
@@ -412,12 +414,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .sum::<f64>()
                     / frame.header.n_targets as f64;
 
-                trace!(
+                debug!(
                     "Processing radar frame with {} targets min={} max={} avg={}",
-                    frame.header.n_targets,
-                    min,
-                    max,
-                    avg
+                    frame.header.n_targets, min, max, avg
                 );
 
                 #[cfg(feature = "rerun")]
@@ -868,11 +867,7 @@ fn transform_xyz(range: f32, azimuth: f32, elevation: f32, mirror: bool) -> [f32
     let x = range * ele.cos() * azi.cos();
     let y = range * ele.cos() * azi.sin();
     let z = range * ele.sin();
-    if mirror {
-        [x, -y, z]
-    } else {
-        [x, y, z]
-    }
+    if mirror { [x, -y, z] } else { [x, y, z] }
 }
 
 #[cfg(feature = "rerun")]

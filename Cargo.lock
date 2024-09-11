@@ -1661,8 +1661,8 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "drvegrd"
-version = "1.3.3"
-source = "git+ssh://git@bitbucket.org/au-zone/drvegrd-rs.git?tag=1.3.3#121e2e02de4c097ef65e9dcebf2521a15f3e55ff"
+version = "1.3.4"
+source = "git+ssh://git@bitbucket.org/au-zone/drvegrd-rs.git?tag=1.3.4#3399a6c242f66e805fed383b8f565f24083efdcc"
 dependencies = [
  "async-std",
  "cdr",
