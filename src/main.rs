@@ -6,12 +6,10 @@ use drvegrd::{
     eth::RadarCubeReader,
 };
 use edgefirst_schemas::{
-    builtin_interfaces,
-    builtin_interfaces::Time,
-    edgefirst_msgs,
+    builtin_interfaces::{self, Time},
+    edgefirst_msgs::{self, RadarInfo},
     geometry_msgs::{Quaternion, Transform, TransformStamped, Vector3},
-    sensor_msgs, std_msgs,
-    std_msgs::Header,
+    sensor_msgs, std_msgs::{self, Header},
 };
 use kanal::{bounded_async as channel, AsyncSender as Sender};
 use log::{debug, error, info, trace, warn};
@@ -99,6 +97,16 @@ impl TryFrom<u32> for CenterFrequency {
     }
 }
 
+impl fmt::Display for CenterFrequency {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            CenterFrequency::Low => write!(f, "low"),
+            CenterFrequency::Medium => write!(f, "medium"),
+            CenterFrequency::High => write!(f, "high"),
+        }
+    }
+}
+
 /// The frequency sweep which controls the range of the radar.
 /// Note: ultra-short range is only supported with the low center frequency.
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -119,6 +127,17 @@ impl TryFrom<u32> for FrequencySweep {
             2 => Ok(FrequencySweep::Short),
             3 => Ok(FrequencySweep::UltraShort),
             _ => Err(Error::InvalidFrequencySweep(value)),
+        }
+    }
+}
+
+impl fmt::Display for FrequencySweep {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            FrequencySweep::Long => write!(f, "long"),
+            FrequencySweep::Medium => write!(f, "medium"),
+            FrequencySweep::Short => write!(f, "short"),
+            FrequencySweep::UltraShort => write!(f, "ultra-short"),
         }
     }
 }
@@ -153,6 +172,20 @@ impl TryFrom<u32> for RangeToggle {
     }
 }
 
+impl fmt::Display for RangeToggle {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            RangeToggle::Off => write!(f, "off"),
+            RangeToggle::ShortMedium => write!(f, "short-medium"),
+            RangeToggle::ShortLong => write!(f, "short-long"),
+            RangeToggle::MediumLong => write!(f, "medium-long"),
+            RangeToggle::LongUltraShort => write!(f, "long-ultra-short"),
+            RangeToggle::MediumUltraShort => write!(f, "medium-ultra-short"),
+            RangeToggle::ShortUltraShort => write!(f, "short-ultra-short"),
+        }
+    }
+}
+
 /// The detection sensitivity controls the radar's ability to detect targets.
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum DetectionSensitivity {
@@ -170,6 +203,16 @@ impl TryFrom<u32> for DetectionSensitivity {
             1 => Ok(DetectionSensitivity::Medium),
             2 => Ok(DetectionSensitivity::High),
             _ => Err(Error::InvalidDetectionSensitivity(value)),
+        }
+    }
+}
+
+impl fmt::Display for DetectionSensitivity {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            DetectionSensitivity::Low => write!(f, "low"),
+            DetectionSensitivity::Medium => write!(f, "medium"),
+            DetectionSensitivity::High => write!(f, "high"),
         }
     }
 }
@@ -345,40 +388,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         rr: rr.clone(),
     };
 
-    let publ_tf = match session
-        .declare_publisher("rt/tf_static".to_string())
-        .priority(Priority::Background)
-        .congestion_control(CongestionControl::Drop)
-        .res_async()
-        .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            error!(
-                "Error while declaring tf_static publisher rt/tf_static: {:?}",
-                e
-            );
-            return Err(e);
-        }
-    };
-
-    let tf_msg = build_tf_msg(&args);
-    let tf_msg = Value::from(cdr::serialize::<_, _, CdrLe>(&tf_msg, Infinite)?).encoding(
-        Encoding::WithSuffix(
-            KnownEncoding::AppOctetStream,
-            "geometry_msgs/msg/TransformStamped".into(),
-        ),
-    );
-    thread::spawn(move || {
-        let interval = Duration::from_secs(1);
-        let mut target_time = Instant::now() + interval;
-        loop {
-            publ_tf.put(tf_msg.clone()).res_sync().unwrap();
-            trace!("Send to tf topic rt/tf_static");
-            sleep(target_time.duration_since(Instant::now()));
-            target_time += interval
-        }
-    });
+    spawn_tf_static(session.clone(), &args).await.unwrap();
+    spawn_radar_info(session.clone(), &args).await.unwrap();
 
     if args.cube {
         thread::Builder::new()
@@ -534,6 +545,117 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+}
+
+async fn spawn_tf_static(
+    session: Arc<zenoh::Session>,
+    args: &Args,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let publisher = match session
+        .declare_publisher("rt/tf_static".to_string())
+        .priority(Priority::Background)
+        .congestion_control(CongestionControl::Drop)
+        .res_async()
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            error!("Failed to create publisher rt/tf_static: {:?}", e);
+            return Err(e);
+        }
+    };
+
+    let msg = TransformStamped {
+        header: Header {
+            frame_id: args.base_frame_id.clone(),
+            stamp: timestamp().unwrap_or(Time { sec: 0, nanosec: 0 }),
+        },
+        child_frame_id: args.radar_frame_id.clone(),
+        transform: Transform {
+            translation: Vector3 {
+                x: args.radar_tf_vec[0],
+                y: args.radar_tf_vec[1],
+                z: args.radar_tf_vec[2],
+            },
+            rotation: Quaternion {
+                x: args.radar_tf_quat[0],
+                y: args.radar_tf_quat[1],
+                z: args.radar_tf_quat[2],
+                w: args.radar_tf_quat[3],
+            },
+        },
+    };
+
+    let msg =
+        Value::from(cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?).encoding(Encoding::WithSuffix(
+            KnownEncoding::AppOctetStream,
+            "geometry_msgs/msg/TransformStamped".into(),
+        ));
+
+    thread::spawn(move || {
+        let interval = Duration::from_secs(1);
+        let mut target_time = Instant::now() + interval;
+
+        loop {
+            publisher.put(msg.clone()).res_sync().unwrap();
+            trace!("radarpub publishing rt/tf_static");
+            sleep(target_time.duration_since(Instant::now()));
+            target_time += interval
+        }
+    });
+
+    Ok(())
+}
+
+async fn spawn_radar_info(
+    session: Arc<zenoh::Session>,
+    args: &Args,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let publisher = match session
+        .declare_publisher("rt/radar/info".to_string())
+        .priority(Priority::Background)
+        .congestion_control(CongestionControl::Drop)
+        .res_async()
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            error!("Failed to create publisher rt/radar/info: {:?}", e);
+            return Err(e);
+        }
+    };
+
+    let msg = RadarInfo {
+        header: Header {
+            frame_id: args.base_frame_id.clone(),
+            stamp: timestamp().unwrap_or(Time { sec: 0, nanosec: 0 }),
+        },
+        center_frequency: args.center_frequency.to_string(),
+        frequency_sweep: args.frequency_sweep.to_string(),
+        range_toggle: args.range_toggle.to_string(),
+        detection_sensitivity: args.detection_sensitivity.to_string(),
+        cube: args.cube,
+    };
+
+    let msg =
+        Value::from(cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?).encoding(Encoding::WithSuffix(
+            KnownEncoding::AppOctetStream,
+            "edgefirst_msgs/msg/RadarInfo".into(),
+        ));
+
+    thread::spawn(move || {
+        let interval = Duration::from_secs(1);
+        let mut target_time = Instant::now() + interval;
+
+        loop {
+            publisher.put(msg.clone()).res_sync().unwrap();
+            trace!("radarpub publishing rt/radar/info");
+            sleep(target_time.duration_since(Instant::now()));
+            target_time += interval
+        }
+    });
+
+    Ok(())
 }
 
 async fn udp_loop(ctx: Context) -> Result<(), Box<dyn std::error::Error>> {
@@ -867,7 +989,11 @@ fn transform_xyz(range: f32, azimuth: f32, elevation: f32, mirror: bool) -> [f32
     let x = range * ele.cos() * azi.cos();
     let y = range * ele.cos() * azi.sin();
     let z = range * ele.sin();
-    if mirror { [x, -y, z] } else { [x, y, z] }
+    if mirror {
+        [x, -y, z]
+    } else {
+        [x, y, z]
+    }
 }
 
 #[cfg(feature = "rerun")]
@@ -888,29 +1014,6 @@ fn colormap_viridis_srgb(t: f32) -> [u8; 4] {
 
     let c = c * 255.0;
     [c.x as u8, c.y as u8, c.z as u8, 255]
-}
-
-fn build_tf_msg(args: &Args) -> TransformStamped {
-    TransformStamped {
-        header: Header {
-            frame_id: args.base_frame_id.clone(),
-            stamp: timestamp().unwrap_or(Time { sec: 0, nanosec: 0 }),
-        },
-        child_frame_id: args.radar_frame_id.clone(),
-        transform: Transform {
-            translation: Vector3 {
-                x: args.radar_tf_vec[0],
-                y: args.radar_tf_vec[1],
-                z: args.radar_tf_vec[2],
-            },
-            rotation: Quaternion {
-                x: args.radar_tf_quat[0],
-                y: args.radar_tf_quat[1],
-                z: args.radar_tf_quat[2],
-                w: args.radar_tf_quat[3],
-            },
-        },
-    }
 }
 
 fn timestamp() -> Result<builtin_interfaces::Time, std::io::Error> {
