@@ -2,21 +2,23 @@ use async_std::{net::UdpSocket, task::block_on};
 use cdr::{CdrLe, Infinite};
 use clap::{Parser, ValueEnum};
 use drvegrd::{
-    can::{read_message, write_parameter, Parameter},
+    can::{read_message, write_parameter, Parameter, Target},
     eth::RadarCubeReader,
 };
 use edgefirst_schemas::{
     builtin_interfaces::{self, Time},
     edgefirst_msgs::{self, RadarInfo},
     geometry_msgs::{Quaternion, Transform, TransformStamped, Vector3},
-    sensor_msgs, std_msgs::{self, Header},
+    sensor_msgs,
+    std_msgs::{self, Header},
 };
-use kanal::{bounded_async as channel, AsyncSender as Sender};
+use kanal::{bounded_async as channel, AsyncReceiver, AsyncSender as Sender};
 use log::{debug, error, info, trace, warn};
 #[cfg(feature = "rerun")]
 use rerun::{external::re_sdk_comms::DEFAULT_SERVER_PORT, Points3D};
 use socketcan::async_std::CanSocket;
 use std::{
+    collections::VecDeque,
     f32::consts::PI,
     fmt, io,
     str::FromStr as _,
@@ -228,11 +230,15 @@ struct Args {
     #[arg(short, long, default_value = "tcp/127.0.0.1:7447")]
     endpoint: Vec<String>,
 
-    /// ros topic
+    /// radar targets topic name
     #[arg(long, default_value = "rt/radar/targets")]
     targets_topic: String,
 
-    /// ros topic
+    /// radar clusters topic name
+    #[arg(long, default_value = "rt/radar/clusters")]
+    clusters_topic: String,
+
+    /// radar data cube topic name
     #[arg(long, default_value = "rt/radar/cube")]
     cube_topic: String,
 
@@ -293,6 +299,14 @@ struct Args {
     /// Enable streaming the low-level radar data cube on the cube_topic.
     #[arg(long, env, default_value = "false")]
     cube: bool,
+
+    /// Enable radar target clustering task.
+    #[arg(long, env, default_value = "false")]
+    clustering: bool,
+
+    /// Clustering window size in frames (one frame is 55ms).
+    #[arg(long, env, default_value = "1")]
+    window_size: usize,
 
     /// connect to remote rerun viewer at this address
     #[cfg(feature = "rerun")]
@@ -391,6 +405,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     spawn_tf_static(session.clone(), &args).await.unwrap();
     spawn_radar_info(session.clone(), &args).await.unwrap();
 
+    let clustering = if args.clustering {
+        let session = session.clone();
+        let args = args.clone();
+        let (tx, rx) = channel(10000);
+
+        thread::Builder::new()
+            .name("clustering".to_string())
+            .spawn(move || block_on(clustering_task(session, &args, rx)).unwrap())?;
+
+        Some(tx)
+    } else {
+        None
+    };
+
     if args.cube {
         thread::Builder::new()
             .name("radarcube".to_string())
@@ -426,7 +454,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     / frame.header.n_targets as f64;
 
                 debug!(
-                    "Processing radar frame with {} targets min={} max={} avg={}",
+                    "Processing radar frame with {} targets - power: min={} max={} avg={}",
                     frame.header.n_targets, min, max, avg
                 );
 
@@ -455,26 +483,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap();
                 }
 
-                let data: Vec<_> = (0..frame.header.n_targets)
-                    .flat_map(|idx| {
-                        let tgt = &frame.targets[idx];
+                let targets = frame.targets[..frame.header.n_targets].to_vec();
+
+                let data: Vec<_> = targets
+                    .iter()
+                    .flat_map(|target| {
                         let xyz = transform_xyz(
-                            tgt.range as f32,
-                            tgt.azimuth as f32,
-                            tgt.elevation as f32,
+                            target.range as f32,
+                            target.azimuth as f32,
+                            target.elevation as f32,
                             args.mirror,
                         );
                         [
                             xyz[0],
                             xyz[1],
                             xyz[2],
-                            tgt.speed as f32,
-                            tgt.power as f32,
-                            tgt.rcs as f32,
+                            target.speed as f32,
+                            target.power as f32,
+                            target.rcs as f32,
                         ]
                     })
                     .flat_map(|elem| elem.to_ne_bytes())
                     .collect();
+
+                if let Some(tx) = &clustering {
+                    tx.send(targets).await.unwrap();
+                }
+
                 let fields = vec![
                     sensor_msgs::PointField {
                         name: String::from("x"),
@@ -539,8 +574,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .res_async()
                     .await
                 {
-                    Ok(_) => trace!("PointCloud2 Message Sent"),
-                    Err(e) => error!("PointCloud2 Message Error: {:?}", e),
+                    Ok(_) => trace!("{} message sent", args.targets_topic),
+                    Err(e) => error!("{} message error: {:?}", args.targets_topic, e),
                 }
             }
         }
@@ -656,6 +691,113 @@ async fn spawn_radar_info(
     });
 
     Ok(())
+}
+
+async fn clustering_task(
+    session: Arc<zenoh::Session>,
+    args: &Args,
+    rx: AsyncReceiver<Vec<Target>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut window = VecDeque::<Vec<Target>>::with_capacity(args.window_size);
+
+    loop {
+        if window.len() == args.window_size {
+            window.pop_front();
+        }
+
+        let targets = rx.recv().await.unwrap();
+        window.push_back(targets);
+        let targets = window.iter().flat_map(|v| v.iter()).collect::<Vec<_>>();
+
+        let data: Vec<_> = targets
+            .iter()
+            .flat_map(|target| {
+                let xyz = transform_xyz(
+                    target.range as f32,
+                    target.azimuth as f32,
+                    target.elevation as f32,
+                    args.mirror,
+                );
+                [
+                    xyz[0],
+                    xyz[1],
+                    xyz[2],
+                    target.speed as f32,
+                    target.power as f32,
+                    target.rcs as f32,
+                ]
+            })
+            .flat_map(|elem| elem.to_ne_bytes())
+            .collect();
+
+        let fields = vec![
+            sensor_msgs::PointField {
+                name: String::from("x"),
+                offset: 0,
+                datatype: PointFieldType::FLOAT32 as u8,
+                count: 1,
+            },
+            sensor_msgs::PointField {
+                name: String::from("y"),
+                offset: 4,
+                datatype: PointFieldType::FLOAT32 as u8,
+                count: 1,
+            },
+            sensor_msgs::PointField {
+                name: String::from("z"),
+                offset: 8,
+                datatype: PointFieldType::FLOAT32 as u8,
+                count: 1,
+            },
+            sensor_msgs::PointField {
+                name: String::from("speed"),
+                offset: 12,
+                datatype: PointFieldType::FLOAT32 as u8,
+                count: 1,
+            },
+            sensor_msgs::PointField {
+                name: String::from("power"),
+                offset: 16,
+                datatype: PointFieldType::FLOAT32 as u8,
+                count: 1,
+            },
+            sensor_msgs::PointField {
+                name: String::from("rcs"),
+                offset: 20,
+                datatype: PointFieldType::FLOAT32 as u8,
+                count: 1,
+            },
+        ];
+
+        let msg = sensor_msgs::PointCloud2 {
+            header: std_msgs::Header {
+                stamp: timestamp()?,
+                frame_id: args.radar_frame_id.clone(),
+            },
+            height: 1,
+            width: targets.len() as u32,
+            fields,
+            is_bigendian: false,
+            point_step: 24,
+            row_step: 24 * targets.len() as u32,
+            data,
+            is_dense: true,
+        };
+        let encoded = cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?;
+
+        match session
+            .put(&args.clusters_topic, encoded)
+            .encoding(Encoding::WithSuffix(
+                KnownEncoding::AppOctetStream,
+                "sensor_msgs/msg/PointCloud2".into(),
+            ))
+            .res_async()
+            .await
+        {
+            Ok(_) => trace!("{} message sent", args.clusters_topic),
+            Err(e) => error!("{} message error: {:?}", args.clusters_topic, e),
+        }
+    }
 }
 
 async fn udp_loop(ctx: Context) -> Result<(), Box<dyn std::error::Error>> {
