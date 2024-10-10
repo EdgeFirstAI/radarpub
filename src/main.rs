@@ -308,19 +308,20 @@ struct Args {
     #[arg(long, env, default_value = "1")]
     window_size: usize,
 
-    // Clustering DBSCAN distance limit (meters)
+    // Clustering DBSCAN distance limit (euclidean distance)
     #[arg(long, env, default_value = "1")]
     clustering_eps: f64,
 
-    // Clustering DBSCAN axis scaling
+    // Clustering DBSCAN parameter scaling. Parameter order is x, y, z, speed. Set the appropriate
+    // axis to 0 to ignore that axis
     #[arg(
         long,
         env,
-        default_value = "1 1 0",
+        default_value = "1 1 0 0",
         value_delimiter = ' ',
-        num_args = 3
+        num_args = 4
     )]
-    clustering_dist_scale: Vec<f32>,
+    clustering_param_scale: Vec<f32>,
 
     // Clustering DBSCAN point limit. Minimum 3
     #[arg(long, env, default_value = "5")]
@@ -736,9 +737,11 @@ async fn clustering_task(
                     args.mirror,
                 );
                 for i in 0..3 {
-                    xyz[i] *= args.clustering_dist_scale[i];
+                    xyz[i] *= args.clustering_param_scale[i];
                 }
-                Vec::from(xyz)
+                let mut v = Vec::from(xyz);
+                v.push(t.speed as f32 * args.clustering_param_scale[3]);
+                v
             })
             .collect();
         let dbscan_clusters =
