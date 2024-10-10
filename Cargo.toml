@@ -35,6 +35,7 @@ ndarray = "0.16.1"
 kanal = { git = "https://github.com/fereidani/kanal", rev = "125fb78" }
 libc = "0.2"
 rerun = { version = "0.18.2", optional = true }
+dbscan = "0.3.1"
 
 [features]
 rerun = ["dep:rerun"]
