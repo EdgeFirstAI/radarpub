@@ -305,7 +305,7 @@ struct Args {
     clustering: bool,
 
     /// Clustering window size in frames (one frame is 55ms).
-    #[arg(long, env, default_value = "1")]
+    #[arg(long, env, default_value = "6")]
     window_size: usize,
 
     // Clustering DBSCAN distance limit (euclidean distance)
