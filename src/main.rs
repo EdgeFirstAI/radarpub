@@ -739,8 +739,7 @@ async fn clustering_task(
 
                 let mut v = Vec::from(xyz);
                 v.push(t.speed as f32);
-
-                for i in 0..v.len() {
+                for (i, _) in v.iter().enumerate() {
                     v[i] *= args.clustering_param_scale[i];
                 }
                 v
