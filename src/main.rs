@@ -730,7 +730,7 @@ async fn clustering_task(
         let dbscantargets: Vec<Vec<f32>> = targets
             .iter()
             .map(|t| {
-                let mut xyz = transform_xyz(
+                let xyz = transform_xyz(
                     t.range as f32,
                     t.azimuth as f32,
                     t.elevation as f32,
@@ -739,8 +739,8 @@ async fn clustering_task(
 
                 let mut v = Vec::from(xyz);
                 v.push(t.speed as f32);
-                for (i, _) in v.iter().enumerate() {
-                    v[i] *= args.clustering_param_scale[i];
+                for (i, val) in v.iter_mut().enumerate() {
+                    *val *= args.clustering_param_scale[i];
                 }
                 v
             })
