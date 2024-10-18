@@ -305,8 +305,27 @@ struct Args {
     clustering: bool,
 
     /// Clustering window size in frames (one frame is 55ms).
-    #[arg(long, env, default_value = "1")]
+    #[arg(long, env, default_value = "6")]
     window_size: usize,
+
+    // Clustering DBSCAN distance limit (euclidean distance)
+    #[arg(long, env, default_value = "1")]
+    clustering_eps: f64,
+
+    // Clustering DBSCAN parameter scaling. Parameter order is x, y, z, speed. Set the appropriate
+    // axis to 0 to ignore that axis
+    #[arg(
+        long,
+        env,
+        default_value = "1 1 0 0",
+        value_delimiter = ' ',
+        num_args = 4
+    )]
+    clustering_param_scale: Vec<f32>,
+
+    // Clustering DBSCAN point limit. Minimum 3
+    #[arg(long, env, default_value = "5")]
+    clustering_point_limit: usize,
 
     /// connect to remote rerun viewer at this address
     #[cfg(feature = "rerun")]
@@ -693,31 +712,57 @@ async fn spawn_radar_info(
     Ok(())
 }
 
+use dbscan::{Classification, Model};
 async fn clustering_task(
     session: Arc<zenoh::Session>,
     args: &Args,
     rx: AsyncReceiver<Vec<Target>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut window = VecDeque::<Vec<Target>>::with_capacity(args.window_size);
-
     loop {
         if window.len() == args.window_size {
             window.pop_front();
         }
 
-        let targets = rx.recv().await.unwrap();
+        let targets: Vec<Target> = rx.recv().await.unwrap();
         window.push_back(targets);
-        let targets = window.iter().flat_map(|v| v.iter()).collect::<Vec<_>>();
+        let targets: Vec<&Target> = window.iter().flat_map(|v| v.iter()).collect::<Vec<_>>();
+        let dbscantargets: Vec<Vec<f32>> = targets
+            .iter()
+            .map(|t| {
+                let xyz = transform_xyz(
+                    t.range as f32,
+                    t.azimuth as f32,
+                    t.elevation as f32,
+                    args.mirror,
+                );
+
+                let mut v = Vec::from(xyz);
+                v.push(t.speed as f32);
+                for (i, val) in v.iter_mut().enumerate() {
+                    *val *= args.clustering_param_scale[i];
+                }
+                v
+            })
+            .collect();
+        let dbscan_clusters =
+            Model::new(args.clustering_eps, args.clustering_point_limit).run(&dbscantargets);
 
         let data: Vec<_> = targets
             .iter()
-            .flat_map(|target| {
+            .zip(dbscan_clusters.iter())
+            .flat_map(|(target, cluster)| {
                 let xyz = transform_xyz(
                     target.range as f32,
                     target.azimuth as f32,
                     target.elevation as f32,
                     args.mirror,
                 );
+                let cluster_id = match cluster {
+                    Classification::Core(i) => i + 1,
+                    Classification::Edge(i) => i + 1,
+                    Classification::Noise => 0,
+                };
                 [
                     xyz[0],
                     xyz[1],
@@ -725,6 +770,7 @@ async fn clustering_task(
                     target.speed as f32,
                     target.power as f32,
                     target.rcs as f32,
+                    cluster_id as f32,
                 ]
             })
             .flat_map(|elem| elem.to_ne_bytes())
@@ -767,6 +813,12 @@ async fn clustering_task(
                 datatype: PointFieldType::FLOAT32 as u8,
                 count: 1,
             },
+            sensor_msgs::PointField {
+                name: String::from("cluster_id"),
+                offset: 24,
+                datatype: PointFieldType::FLOAT32 as u8,
+                count: 1,
+            },
         ];
 
         let msg = sensor_msgs::PointCloud2 {
@@ -778,8 +830,8 @@ async fn clustering_task(
             width: targets.len() as u32,
             fields,
             is_bigendian: false,
-            point_step: 24,
-            row_step: 24 * targets.len() as u32,
+            point_step: 28,
+            row_step: 28 * targets.len() as u32,
             data,
             is_dense: true,
         };
