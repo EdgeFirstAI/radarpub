@@ -736,11 +736,13 @@ async fn clustering_task(
                     t.elevation as f32,
                     args.mirror,
                 );
-                for i in 0..3 {
-                    xyz[i] *= args.clustering_param_scale[i];
-                }
+
                 let mut v = Vec::from(xyz);
-                v.push(t.speed as f32 * args.clustering_param_scale[3]);
+                v.push(t.speed as f32);
+
+                for i in 0..v.len() {
+                    v[i] *= args.clustering_param_scale[i];
+                }
                 v
             })
             .collect();
