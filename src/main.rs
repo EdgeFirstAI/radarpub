@@ -308,12 +308,12 @@ struct Args {
     #[arg(long, env, default_value = "6")]
     window_size: usize,
 
-    // Clustering DBSCAN distance limit (euclidean distance)
+    /// Clustering DBSCAN distance limit (euclidean distance)
     #[arg(long, env, default_value = "1")]
     clustering_eps: f64,
 
-    // Clustering DBSCAN parameter scaling. Parameter order is x, y, z, speed. Set the appropriate
-    // axis to 0 to ignore that axis
+    /// Clustering DBSCAN parameter scaling. Parameter order is x, y, z, speed.
+    /// Set the appropriate axis to 0 to ignore that axis
     #[arg(
         long,
         env,
@@ -323,7 +323,7 @@ struct Args {
     )]
     clustering_param_scale: Vec<f32>,
 
-    // Clustering DBSCAN point limit. Minimum 3
+    /// Clustering DBSCAN point limit. Minimum 3
     #[arg(long, env, default_value = "5")]
     clustering_point_limit: usize,
 
