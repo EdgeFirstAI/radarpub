@@ -1,6 +1,7 @@
 use async_std::{net::UdpSocket, task::block_on};
 use cdr::{CdrLe, Infinite};
 use clap::{Parser, ValueEnum};
+use clustering::Clustering;
 use drvegrd::{
     can::{read_message, write_parameter, Parameter, Target},
     eth::RadarCubeReader,
@@ -20,6 +21,7 @@ use socketcan::async_std::CanSocket;
 use std::{
     collections::VecDeque,
     f32::consts::PI,
+    f64::NAN,
     fmt, io,
     str::FromStr as _,
     sync::Arc,
@@ -456,12 +458,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .iter()
                     .map(|tgt| tgt.power)
                     .reduce(f64::min)
-                    .unwrap();
+                    .unwrap_or(NAN);
                 let max = frame.targets[..frame.header.n_targets]
                     .iter()
                     .map(|tgt| tgt.power)
                     .reduce(f64::max)
-                    .unwrap();
+                    .unwrap_or(NAN);
                 let avg = frame.targets[..frame.header.n_targets]
                     .iter()
                     .map(|tgt| tgt.power)
@@ -708,13 +710,18 @@ async fn spawn_radar_info(
     Ok(())
 }
 
-use dbscan::{Classification, Model};
+mod clustering;
 async fn clustering_task(
     session: Arc<zenoh::Session>,
     args: &Args,
     rx: AsyncReceiver<Vec<Target>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut window = VecDeque::<Vec<Target>>::with_capacity(args.window_size);
+    let mut clustering = Clustering::new(
+        args.clustering_eps,
+        &args.clustering_param_scale,
+        args.clustering_point_limit,
+    );
     loop {
         if window.len() == args.window_size {
             window.pop_front();
@@ -723,30 +730,32 @@ async fn clustering_task(
         let targets: Vec<Target> = rx.recv().await.unwrap();
         window.push_back(targets);
         let targets: Vec<&Target> = window.iter().flat_map(|v| v.iter()).collect::<Vec<_>>();
-        let dbscantargets: Vec<Vec<f32>> = targets
+        let dbscantargets: Vec<_> = targets
             .iter()
             .map(|t| {
-                let xyz = transform_xyz(
+                let [x, y, z] = transform_xyz(
                     t.range as f32,
                     t.azimuth as f32,
                     t.elevation as f32,
                     args.mirror,
                 );
 
-                let mut v = Vec::from(xyz);
-                v.push(t.speed as f32);
+                let mut v = [x, y, z, t.speed as f32];
                 for (i, val) in v.iter_mut().enumerate() {
                     *val *= args.clustering_param_scale[i];
                 }
                 v
             })
             .collect();
-        let dbscan_clusters =
-            Model::new(args.clustering_eps, args.clustering_point_limit).run(&dbscantargets);
+        let time = timestamp()?;
+        let dbscan_clusters = clustering
+            .cluster(dbscantargets, time.to_nanos())
+            .into_iter()
+            .map(|v| v[4]);
 
         let data: Vec<_> = targets
             .iter()
-            .zip(dbscan_clusters.iter())
+            .zip(dbscan_clusters)
             .flat_map(|(target, cluster)| {
                 let xyz = transform_xyz(
                     target.range as f32,
@@ -754,11 +763,6 @@ async fn clustering_task(
                     target.elevation as f32,
                     args.mirror,
                 );
-                let cluster_id = match cluster {
-                    Classification::Core(i) => i + 1,
-                    Classification::Edge(i) => i + 1,
-                    Classification::Noise => 0,
-                };
                 [
                     xyz[0],
                     xyz[1],
@@ -766,12 +770,11 @@ async fn clustering_task(
                     target.speed as f32,
                     target.power as f32,
                     target.rcs as f32,
-                    cluster_id as f32,
+                    cluster,
                 ]
             })
             .flat_map(|elem| elem.to_ne_bytes())
             .collect();
-
         let fields = vec![
             sensor_msgs::PointField {
                 name: String::from("x"),
@@ -819,7 +822,7 @@ async fn clustering_task(
 
         let msg = sensor_msgs::PointCloud2 {
             header: std_msgs::Header {
-                stamp: timestamp()?,
+                stamp: time,
                 frame_id: args.radar_frame_id.clone(),
             },
             height: 1,

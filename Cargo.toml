@@ -36,6 +36,9 @@ kanal = { git = "https://github.com/fereidani/kanal", rev = "125fb78" }
 libc = "0.2"
 rerun = { version = "0.18.2", optional = true }
 dbscan = "0.3.1"
+lapjv = "0.2.1"
+uuid = { version = "1.5.0", features = ["v4"] }
+nalgebra = "0.32"
 
 [features]
 rerun = ["dep:rerun"]
