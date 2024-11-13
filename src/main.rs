@@ -452,10 +452,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(frame) => {
                 trace!("Received radar frame: {:?}", frame);
 
-                if frame.header.n_targets == 0 {
-                    continue;
-                }
-
                 let min = frame.targets[..frame.header.n_targets]
                     .iter()
                     .map(|tgt| tgt.power)
