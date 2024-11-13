@@ -101,10 +101,8 @@ impl Clustering {
         let mut clusters = HashMap::new();
         for p in data.iter() {
             let id = p[4] as usize;
-            if !clusters.contains_key(&id) {
-                clusters.insert(id, Vec::new());
-            }
-            clusters.get_mut(&id).unwrap().push(p.clone())
+            clusters.entry(id).or_insert_with(Vec::new);
+            clusters.get_mut(&id).unwrap().push(*p)
         }
         for (id, cluster) in clusters {
             if id == 0 {
@@ -169,7 +167,7 @@ impl Clustering {
                 None => {
                     let new_id = self.get_new_cluster_id();
                     self.track_id_to_cluster_id
-                        .insert(info.uuid.clone(), new_id);
+                        .insert(info.uuid, new_id);
                     new_id
                 }
                 Some(v) => *v,

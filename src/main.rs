@@ -2,6 +2,7 @@ use async_std::{net::UdpSocket, task::block_on};
 use cdr::{CdrLe, Infinite};
 use clap::{Parser, ValueEnum};
 use clustering::Clustering;
+use core::f64;
 use drvegrd::{
     can::{read_message, write_parameter, Parameter, Target},
     eth::RadarCubeReader,
@@ -21,7 +22,6 @@ use socketcan::async_std::CanSocket;
 use std::{
     collections::VecDeque,
     f32::consts::PI,
-    f64::NAN,
     fmt, io,
     str::FromStr as _,
     sync::Arc,
@@ -458,12 +458,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .iter()
                     .map(|tgt| tgt.power)
                     .reduce(f64::min)
-                    .unwrap_or(NAN);
+                    .unwrap_or(f64::NAN);
                 let max = frame.targets[..frame.header.n_targets]
                     .iter()
                     .map(|tgt| tgt.power)
                     .reduce(f64::max)
-                    .unwrap_or(NAN);
+                    .unwrap_or(f64::NAN);
                 let avg = frame.targets[..frame.header.n_targets]
                     .iter()
                     .map(|tgt| tgt.power)
