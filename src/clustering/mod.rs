@@ -166,8 +166,7 @@ impl Clustering {
             let new_cluster_id = match self.track_id_to_cluster_id.get(&info.uuid) {
                 None => {
                     let new_id = self.get_new_cluster_id();
-                    self.track_id_to_cluster_id
-                        .insert(info.uuid, new_id);
+                    self.track_id_to_cluster_id.insert(info.uuid, new_id);
                     new_id
                 }
                 Some(v) => *v,
