@@ -4,8 +4,8 @@ use clap::{Parser, ValueEnum};
 use clustering::Clustering;
 use core::f64;
 use drvegrd::{
-    can::{read_message, write_parameter, Parameter, Target},
-    eth::RadarCubeReader,
+    can::{read_message, read_status, write_parameter, Parameter, Status, Target},
+    eth::{RadarCube, RadarCubeReader},
 };
 use edgefirst_schemas::{
     builtin_interfaces::{self, Time},
@@ -16,8 +16,6 @@ use edgefirst_schemas::{
 };
 use kanal::{bounded_async as channel, AsyncReceiver, AsyncSender as Sender};
 use log::{debug, error, info, trace, warn};
-#[cfg(feature = "rerun")]
-use rerun::{external::re_sdk_comms::DEFAULT_SERVER_PORT, Points3D};
 use socketcan::async_std::CanSocket;
 use std::{
     collections::VecDeque,
@@ -328,50 +326,18 @@ struct Args {
     /// Clustering DBSCAN point limit. Minimum 3
     #[arg(long, env, default_value = "5")]
     clustering_point_limit: usize,
-
-    /// connect to remote rerun viewer at this address
-    #[cfg(feature = "rerun")]
-    #[arg(short, long)]
-    connect: Option<std::net::Ipv4Addr>,
-
-    /// record rerun data to file instead of live viewer
-    #[cfg(feature = "rerun")]
-    #[arg(short, long)]
-    record: Option<String>,
-
-    /// use this port for the rerun viewer (remote or web server)
-    #[cfg(feature = "rerun")]
-    #[arg(short, long)]
-    port: Option<u16>,
 }
 
 struct Context {
     session: Arc<Session>,
     topic: String,
     radar_frame_id: String,
-
-    #[cfg(feature = "rerun")]
-    rr: Option<rerun::RecordingStream>,
 }
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     env_logger::init();
-
-    #[cfg(feature = "rerun")]
-    let rr = if let Some(addr) = args.connect {
-        let port = args.port.unwrap_or(DEFAULT_SERVER_PORT);
-        let remote = std::net::SocketAddr::new(addr.into(), port);
-        Some(
-            rerun::RecordingStreamBuilder::new("radarpub")
-                .connect_opts(remote, rerun::default_flush_timeout())?,
-        )
-    } else if let Some(record) = args.record {
-        Some(rerun::RecordingStreamBuilder::new("radarpub").save(record)?)
-    } else {
-        None
-    };
 
     let mut config = Config::default();
     let mode = WhatAmI::from_str(&args.mode).unwrap();
@@ -382,6 +348,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     debug!("Opened Zenoh session");
 
     let sock = CanSocket::open(&args.can)?;
+
+    let software_generation = read_status(&sock, Status::SoftwareGeneration)
+        .await
+        .unwrap();
+    let major_version = read_status(&sock, Status::MajorVersion).await.unwrap();
+    let minor_version = read_status(&sock, Status::MinorVersion).await.unwrap();
+    let patch_version = read_status(&sock, Status::PatchVersion).await.unwrap();
+    let serial_number = read_status(&sock, Status::SerialNumber).await.unwrap();
+    info!("Software Generation: {}", software_generation);
+    info!(
+        "Version: {}.{}.{}",
+        major_version, minor_version, patch_version
+    );
+    info!("Serial Number: {}", serial_number);
 
     let center_frequency = write_parameter(
         &sock,
@@ -419,8 +399,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         session: session.clone(),
         topic: args.cube_topic.clone(),
         radar_frame_id: args.radar_frame_id.clone(),
-        #[cfg(feature = "rerun")]
-        rr: rr.clone(),
     };
 
     spawn_tf_static(session.clone(), &args).await.unwrap();
@@ -448,6 +426,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             })?;
     }
 
+    let targets_publisher = match session
+        .clone()
+        .declare_publisher(args.targets_topic.clone())
+        .priority(Priority::DataHigh)
+        .congestion_control(CongestionControl::Block)
+        .res_async()
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            error!("Failed to create publisher {}: {:?}", args.targets_topic, e);
+            return Err(e);
+        }
+    };
+
     loop {
         match read_message(&sock).await {
             Err(err) => println!("Error: {:?}", err),
@@ -470,133 +463,112 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .sum::<f64>()
                     / frame.header.n_targets as f64;
 
-                debug!(
+                trace!(
                     "Processing radar frame with {} targets - power: min={} max={} avg={}",
                     frame.header.n_targets, min, max, avg
                 );
 
-                #[cfg(feature = "rerun")]
-                if let Some(rr) = &rr {
-                    rr.log(
-                        "radar",
-                        &Points3D::new((0..frame.header.n_targets).map(|idx| {
-                            let tgt = &frame.targets[idx];
-                            transform_xyz(
-                                tgt.range as f32,
-                                tgt.azimuth as f32,
-                                tgt.elevation as f32,
-                                false,
-                            )
-                        }))
-                        .with_radii([0.5])
-                        .with_colors(
-                            frame.targets[..frame.header.n_targets].iter().map(|tgt| {
-                                let c = tgt.power - min;
-                                let c = c / (max - min + 0.0001);
-                                colormap_viridis_srgb(c as f32)
-                            }),
-                        ),
-                    )
-                    .unwrap();
-                }
-
-                let targets = frame.targets[..frame.header.n_targets].to_vec();
-
-                let data: Vec<_> = targets
-                    .iter()
-                    .flat_map(|target| {
-                        let xyz = transform_xyz(
-                            target.range as f32,
-                            target.azimuth as f32,
-                            target.elevation as f32,
-                            args.mirror,
-                        );
-                        [
-                            xyz[0],
-                            xyz[1],
-                            xyz[2],
-                            target.speed as f32,
-                            target.power as f32,
-                            target.rcs as f32,
-                        ]
-                    })
-                    .flat_map(|elem| elem.to_ne_bytes())
-                    .collect();
+                let targets = &frame.targets[..frame.header.n_targets];
 
                 if let Some(tx) = &clustering {
-                    tx.send(targets).await.unwrap();
+                    tx.send(targets.to_vec()).await.unwrap();
                 }
 
-                let fields = vec![
-                    sensor_msgs::PointField {
-                        name: String::from("x"),
-                        offset: 0,
-                        datatype: PointFieldType::FLOAT32 as u8,
-                        count: 1,
-                    },
-                    sensor_msgs::PointField {
-                        name: String::from("y"),
-                        offset: 4,
-                        datatype: PointFieldType::FLOAT32 as u8,
-                        count: 1,
-                    },
-                    sensor_msgs::PointField {
-                        name: String::from("z"),
-                        offset: 8,
-                        datatype: PointFieldType::FLOAT32 as u8,
-                        count: 1,
-                    },
-                    sensor_msgs::PointField {
-                        name: String::from("speed"),
-                        offset: 12,
-                        datatype: PointFieldType::FLOAT32 as u8,
-                        count: 1,
-                    },
-                    sensor_msgs::PointField {
-                        name: String::from("power"),
-                        offset: 16,
-                        datatype: PointFieldType::FLOAT32 as u8,
-                        count: 1,
-                    },
-                    sensor_msgs::PointField {
-                        name: String::from("rcs"),
-                        offset: 20,
-                        datatype: PointFieldType::FLOAT32 as u8,
-                        count: 1,
-                    },
-                ];
+                let targets = format_targets(targets, args.mirror, &args.radar_frame_id)?;
 
-                let msg = sensor_msgs::PointCloud2 {
-                    header: std_msgs::Header {
-                        stamp: timestamp()?,
-                        frame_id: args.radar_frame_id.clone(),
-                    },
-                    height: 1,
-                    width: frame.header.n_targets as u32,
-                    fields,
-                    is_bigendian: false,
-                    point_step: 24,
-                    row_step: 24 * frame.header.n_targets as u32,
-                    data,
-                    is_dense: true,
-                };
-                let encoded = cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?;
-
-                match session
-                    .put(&args.targets_topic, encoded)
-                    .encoding(Encoding::WithSuffix(
-                        KnownEncoding::AppOctetStream,
-                        "sensor_msgs/msg/PointCloud2".into(),
-                    ))
-                    .res_async()
-                    .await
-                {
+                match targets_publisher.put(targets).res_async().await {
                     Ok(_) => trace!("{} message sent", args.targets_topic),
                     Err(e) => error!("{} message error: {:?}", args.targets_topic, e),
                 }
             }
         }
     }
+}
+
+fn format_targets(targets: &[Target], mirror: bool, frame_id: &str) -> Result<Value, cdr::Error> {
+    let n_targets = targets.len() as u32;
+    let data: Vec<_> = targets
+        .iter()
+        .flat_map(|target| {
+            let xyz = transform_xyz(
+                target.range as f32,
+                target.azimuth as f32,
+                target.elevation as f32,
+                mirror,
+            );
+            [
+                xyz[0],
+                xyz[1],
+                xyz[2],
+                target.speed as f32,
+                target.power as f32,
+                target.rcs as f32,
+            ]
+        })
+        .flat_map(|elem| elem.to_ne_bytes())
+        .collect();
+
+    let fields = vec![
+        sensor_msgs::PointField {
+            name: String::from("x"),
+            offset: 0,
+            datatype: PointFieldType::FLOAT32 as u8,
+            count: 1,
+        },
+        sensor_msgs::PointField {
+            name: String::from("y"),
+            offset: 4,
+            datatype: PointFieldType::FLOAT32 as u8,
+            count: 1,
+        },
+        sensor_msgs::PointField {
+            name: String::from("z"),
+            offset: 8,
+            datatype: PointFieldType::FLOAT32 as u8,
+            count: 1,
+        },
+        sensor_msgs::PointField {
+            name: String::from("speed"),
+            offset: 12,
+            datatype: PointFieldType::FLOAT32 as u8,
+            count: 1,
+        },
+        sensor_msgs::PointField {
+            name: String::from("power"),
+            offset: 16,
+            datatype: PointFieldType::FLOAT32 as u8,
+            count: 1,
+        },
+        sensor_msgs::PointField {
+            name: String::from("rcs"),
+            offset: 20,
+            datatype: PointFieldType::FLOAT32 as u8,
+            count: 1,
+        },
+    ];
+
+    let msg = sensor_msgs::PointCloud2 {
+        header: std_msgs::Header {
+            stamp: timestamp()?,
+            frame_id: frame_id.to_string(),
+        },
+        height: 1,
+        width: n_targets,
+        fields,
+        is_bigendian: false,
+        point_step: 24,
+        row_step: 24 * n_targets,
+        data,
+        is_dense: true,
+    };
+
+    let encoded = cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?;
+    let encoded = Value::from(encoded).encoding(Encoding::WithSuffix(
+        KnownEncoding::AppOctetStream,
+        "sensor_msgs/msg/PointCloud2".into(),
+    ));
+
+    Ok(encoded)
 }
 
 async fn spawn_tf_static(
@@ -870,6 +842,22 @@ async fn udp_loop(ctx: Context) -> Result<(), Box<dyn std::error::Error>> {
     let mut dropped = 0;
     let mut prev_time = Instant::now();
 
+    let cube_publisher = match ctx
+        .session
+        .clone()
+        .declare_publisher(ctx.topic.clone())
+        .priority(Priority::DataHigh)
+        .congestion_control(CongestionControl::Block)
+        .res_async()
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            error!("Failed to create publisher {}: {:?}", ctx.topic, e);
+            return Err(e);
+        }
+    };
+
     loop {
         let msg = match rx.recv().await {
             Ok(msg) => msg,
@@ -926,91 +914,8 @@ async fn udp_loop(ctx: Context) -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                #[cfg(feature = "rerun")]
-                match &ctx.rr {
-                    Some(rr) => {
-                        // The radar cube shape is (sequence, range, rx antenna, doppler, complex).
-                        // When saving the cube this shape should be maintained (possibly shuffled)
-                        // but for display purposes we take the first sequence, first rx antenna,
-                        // and the real portion of the signal (note drvegrd does imaginary first).
-                        let data = cubemsg.data.slice(ndarray::s![0, .., 0, ..]);
-
-                        // Convert the cube to real absolute values for display as rerun cannot
-                        // handle complex numbers.  The absolute value is to ensure a constant
-                        // background.
-                        let data = data.mapv(|x| x.re.abs());
-                        let tensor = rerun::Tensor::try_from(data)?;
-
-                        rr.log("cube", &tensor)?;
-
-                        rr.log(
-                            "cube/speed_per_bin",
-                            &rerun::Scalar::new(cubemsg.bin_properties.speed_per_bin as f64),
-                        )?;
-                        rr.log(
-                            "cube/range_per_bin",
-                            &rerun::Scalar::new(cubemsg.bin_properties.range_per_bin as f64),
-                        )?;
-                        rr.log(
-                            "cube/bin_per_speed",
-                            &rerun::Scalar::new(cubemsg.bin_properties.bin_per_speed as f64),
-                        )?;
-                    }
-                    None => (),
-                }
-
-                let layout = vec![
-                    edgefirst_msgs::radar_cube_dimension::SEQUENCE,
-                    edgefirst_msgs::radar_cube_dimension::RANGE,
-                    edgefirst_msgs::radar_cube_dimension::RXCHANNEL,
-                    edgefirst_msgs::radar_cube_dimension::DOPPLER,
-                ];
-
-                // Double the final dimension to account for complex data.
-                let shape = cubemsg.data.shape();
-                let shape = vec![
-                    shape[0] as u16,
-                    shape[1] as u16,
-                    shape[2] as u16,
-                    shape[3] as u16 * 2,
-                ];
-
-                // Cast the Complex<i16> vector to a i16 vector.
-                let data = cubemsg.data.into_raw_vec();
-                let data2 = unsafe {
-                    Vec::from_raw_parts(data.as_ptr() as *mut i16, data.len() * 2, data.len() * 2)
-                };
-                std::mem::forget(data);
-
-                let msg = edgefirst_msgs::RadarCube {
-                    header: std_msgs::Header {
-                        stamp: timestamp()?,
-                        frame_id: ctx.radar_frame_id.clone(),
-                    },
-                    timestamp: cubemsg.timestamp,
-                    layout,
-                    shape,
-                    scales: vec![
-                        cubemsg.bin_properties.speed_per_bin,
-                        cubemsg.bin_properties.range_per_bin,
-                        cubemsg.bin_properties.bin_per_speed,
-                    ],
-                    cube: data2,
-                    is_complex: true,
-                };
-
-                let encoded = cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?;
-
-                match ctx
-                    .session
-                    .put(&ctx.topic, encoded)
-                    .encoding(Encoding::WithSuffix(
-                        KnownEncoding::AppOctetStream,
-                        "edgefirst_msgs/msg/RadarCube".into(),
-                    ))
-                    .res_async()
-                    .await
-                {
+                let encoded = format_cube(cubemsg, &ctx.radar_frame_id)?;
+                match cube_publisher.put(encoded).res_async().await {
                     Ok(_) => trace!("RadarCube Message Sent"),
                     Err(e) => error!("RadarCube Message Error: {:?}", e),
                 }
@@ -1022,6 +927,55 @@ async fn udp_loop(ctx: Context) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+}
+
+fn format_cube(cubemsg: RadarCube, frame_id: &str) -> Result<Value, cdr::Error> {
+    let layout = vec![
+        edgefirst_msgs::radar_cube_dimension::SEQUENCE,
+        edgefirst_msgs::radar_cube_dimension::RANGE,
+        edgefirst_msgs::radar_cube_dimension::RXCHANNEL,
+        edgefirst_msgs::radar_cube_dimension::DOPPLER,
+    ];
+
+    // Double the final dimension to account for complex data.
+    let shape = cubemsg.data.shape();
+    let shape = vec![
+        shape[0] as u16,
+        shape[1] as u16,
+        shape[2] as u16,
+        shape[3] as u16 * 2,
+    ];
+
+    // Cast the Complex<i16> vector to a i16 vector.
+    let data = cubemsg.data.into_raw_vec();
+    let data2 =
+        unsafe { Vec::from_raw_parts(data.as_ptr() as *mut i16, data.len() * 2, data.len() * 2) };
+    std::mem::forget(data);
+
+    let msg = edgefirst_msgs::RadarCube {
+        header: std_msgs::Header {
+            stamp: timestamp()?,
+            frame_id: frame_id.to_string(),
+        },
+        timestamp: cubemsg.timestamp,
+        layout,
+        shape,
+        scales: vec![
+            cubemsg.bin_properties.speed_per_bin,
+            cubemsg.bin_properties.range_per_bin,
+            cubemsg.bin_properties.bin_per_speed,
+        ],
+        cube: data2,
+        is_complex: true,
+    };
+
+    let encoded = cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?;
+    let encoded = Value::from(encoded).encoding(Encoding::WithSuffix(
+        KnownEncoding::AppOctetStream,
+        "edgefirst_msgs/msg/RadarCube".into(),
+    ));
+
+    Ok(encoded)
 }
 
 /// The port5 implementation on Linux uses the recvmmsg system call to enable
@@ -1187,26 +1141,6 @@ fn transform_xyz(range: f32, azimuth: f32, elevation: f32, mirror: bool) -> [f32
     } else {
         [x, y, z]
     }
-}
-
-#[cfg(feature = "rerun")]
-fn colormap_viridis_srgb(t: f32) -> [u8; 4] {
-    use rerun::external::glam::Vec3A;
-
-    const C0: Vec3A = Vec3A::new(0.277_727_34, 0.005_407_344_5, 0.334_099_8);
-    const C1: Vec3A = Vec3A::new(0.105_093_04, 1.404_613_5, 1.384_590_1);
-    const C2: Vec3A = Vec3A::new(-0.330_861_84, 0.214_847_56, 0.095_095_165);
-    const C3: Vec3A = Vec3A::new(-4.634_230_6, -5.799_101, -19.332_441);
-    const C4: Vec3A = Vec3A::new(6.228_27, 14.179_934, 56.690_55);
-    const C5: Vec3A = Vec3A::new(4.776_385, -13.745_146, -65.353_035);
-    const C6: Vec3A = Vec3A::new(-5.435_456, 4.645_852_6, 26.312_435);
-
-    debug_assert!((0.0..=1.0).contains(&t));
-
-    let c = C0 + t * (C1 + t * (C2 + t * (C3 + t * (C4 + t * (C5 + t * C6)))));
-
-    let c = c * 255.0;
-    [c.x as u8, c.y as u8, c.z as u8, 255]
 }
 
 fn timestamp() -> Result<builtin_interfaces::Time, std::io::Error> {

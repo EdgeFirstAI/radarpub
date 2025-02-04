@@ -1,2 +1,8 @@
 /target
+.debug
+
+kallsyms
+perf.data*
+
 *.rtm
+*.tflite
