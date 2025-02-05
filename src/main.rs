@@ -996,9 +996,6 @@ async fn port5(tx: Sender<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
     const VLEN: usize = 64;
     const RETRY_TIME: Duration = Duration::from_micros(250);
 
-    let mut vlen_history = [0; 1000];
-    let mut vlen_index = 0;
-
     let mut mmsgs = vec![
         libc::mmsghdr {
             msg_hdr: libc::msghdr {
@@ -1058,22 +1055,10 @@ async fn port5(tx: Sender<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
                     _ => error!("port5 error: {:?}", err),
                 }
             }
-            n => {
-                vlen_history[vlen_index] = n;
-                vlen_index += 1;
-                if vlen_index == vlen_history.len() {
-                    vlen_index = 0;
-                    let avg = vlen_history.iter().sum::<i32>() / vlen_history.len() as i32;
-                    let min = vlen_history.iter().min().unwrap();
-                    let max = vlen_history.iter().max().unwrap();
-                    debug!("recvmmsg avg={} min={} max={}", avg, min, max);
-                }
-
-                match tx.send(buf[..n as usize * SMS_PACKET_SIZE].to_vec()).await {
-                    Ok(_) => (),
-                    Err(e) => error!("port5 error: {:?}", e),
-                }
-            }
+            n => match tx.send(buf[..n as usize * SMS_PACKET_SIZE].to_vec()).await {
+                Ok(_) => (),
+                Err(e) => error!("port5 error: {:?}", e),
+            },
         }
     }
 }
