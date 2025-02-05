@@ -21,7 +21,7 @@ debug = true
 default = []
 
 [dependencies]
-drvegrd = { git = "ssh://git@bitbucket.org/au-zone/drvegrd-rs.git", tag = "1.4.0", features = [ "can" ] }
+drvegrd = { git = "ssh://git@bitbucket.org/au-zone/drvegrd-rs.git", tag = "1.4.1", features = [ "can" ] }
 edgefirst-schemas = "1.2.4"
 async-std = { version = "1.12.0", features = ["attributes"] }
 cdr = "0.2.4"

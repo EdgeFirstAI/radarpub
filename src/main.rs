@@ -5,7 +5,7 @@ use clustering::Clustering;
 use core::f64;
 use drvegrd::{
     can::{read_message, read_status, write_parameter, Parameter, Status, Target},
-    eth::{RadarCube, RadarCubeReader},
+    eth::{RadarCube, RadarCubeReader, SMS_PACKET_SIZE},
 };
 use edgefirst_schemas::{
     builtin_interfaces::{self, Time},
@@ -30,6 +30,8 @@ use zenoh::{
     config::Config,
     prelude::{r#async::*, sync::SyncResolve},
 };
+
+mod common;
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -395,14 +397,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         DetectionSensitivity::try_from(detection_sensitivity).unwrap()
     );
 
-    let ctx = Context {
-        session: session.clone(),
-        topic: args.cube_topic.clone(),
-        radar_frame_id: args.radar_frame_id.clone(),
-    };
-
     spawn_tf_static(session.clone(), &args).await.unwrap();
     spawn_radar_info(session.clone(), &args).await.unwrap();
+
+    let targets_publisher = match session
+        .declare_publisher(args.targets_topic.clone())
+        .priority(Priority::DataHigh)
+        .congestion_control(CongestionControl::Drop)
+        .res_async()
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            error!("Failed to create publisher {}: {:?}", args.targets_topic, e);
+            return Err(e);
+        }
+    };
 
     let clustering = if args.clustering {
         let session = session.clone();
@@ -419,27 +429,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if args.cube {
+        let ctx = Context {
+            session: session.clone(),
+            topic: args.cube_topic.clone(),
+            radar_frame_id: args.radar_frame_id.clone(),
+        };
+
         thread::Builder::new()
             .name("radarcube".to_string())
             .spawn(move || {
                 block_on(udp_loop(ctx)).unwrap();
             })?;
     }
-
-    let targets_publisher = match session
-        .clone()
-        .declare_publisher(args.targets_topic.clone())
-        .priority(Priority::DataHigh)
-        .congestion_control(CongestionControl::Block)
-        .res_async()
-        .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            error!("Failed to create publisher {}: {:?}", args.targets_topic, e);
-            return Err(e);
-        }
-    };
 
     loop {
         match read_message(&sock).await {
@@ -465,7 +466,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 trace!(
                     "Processing radar frame with {} targets - power: min={} max={} avg={}",
-                    frame.header.n_targets, min, max, avg
+                    frame.header.n_targets,
+                    min,
+                    max,
+                    avg
                 );
 
                 let targets = &frame.targets[..frame.header.n_targets];
@@ -824,6 +828,21 @@ async fn clustering_task(
 }
 
 async fn udp_loop(ctx: Context) -> Result<(), Box<dyn std::error::Error>> {
+    let cube_publisher = match ctx
+        .session
+        .declare_publisher(ctx.topic.clone())
+        .priority(Priority::DataHigh)
+        .congestion_control(CongestionControl::Drop)
+        .res_async()
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            error!("Failed to create publisher {}: {:?}", ctx.topic, e);
+            return Err(e);
+        }
+    };
+
     let (tx5, rx) = channel(10000);
     let tx63 = tx5.clone();
 
@@ -842,22 +861,6 @@ async fn udp_loop(ctx: Context) -> Result<(), Box<dyn std::error::Error>> {
     let mut dropped = 0;
     let mut prev_time = Instant::now();
 
-    let cube_publisher = match ctx
-        .session
-        .clone()
-        .declare_publisher(ctx.topic.clone())
-        .priority(Priority::DataHigh)
-        .congestion_control(CongestionControl::Block)
-        .res_async()
-        .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            error!("Failed to create publisher {}: {:?}", ctx.topic, e);
-            return Err(e);
-        }
-    };
-
     loop {
         let msg = match rx.recv().await {
             Ok(msg) => msg,
@@ -867,63 +870,69 @@ async fn udp_loop(ctx: Context) -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
-        match reader.read(&msg) {
-            Ok(Some(cubemsg)) => {
-                trace!("radar data cube with shape {:?}", cubemsg.data.shape());
+        let n_msg = msg.len() / SMS_PACKET_SIZE;
 
-                cube_times[cube_index] = prev_time.elapsed().as_millis() as i32;
-                prev_time = Instant::now();
-                cube_index += 1;
+        for i in 0..n_msg {
+            let begin = i * SMS_PACKET_SIZE;
+            let end = begin + SMS_PACKET_SIZE;
+            match reader.read(&msg[begin..end]) {
+                Ok(Some(cubemsg)) => {
+                    trace!("radar data cube with shape {:?}", cubemsg.data.shape());
 
-                if cube_index == cube_times.len() {
-                    cube_index = 0;
-                    let avg = cube_times.iter().sum::<i32>() / cube_times.len() as i32;
-                    let min = cube_times.iter().min().unwrap();
-                    let max = cube_times.iter().max().unwrap();
-                    let fps = 1000.0 / (avg as f32);
-                    let droprate = (dropped as f32) / cube_times.len() as f32;
-                    dropped = 0;
+                    cube_times[cube_index] = prev_time.elapsed().as_millis() as i32;
+                    prev_time = Instant::now();
+                    cube_index += 1;
 
-                    if droprate > 0.05 {
-                        error!(
-                            "cube fps={} avg={} min={} max={} droprate={:.2}%",
-                            fps,
-                            avg,
-                            min,
-                            max,
-                            droprate * 100.0
-                        );
-                    } else if droprate > 0.025 {
-                        warn!(
-                            "cube fps={} avg={} min={} max={} droprate={:.2}%",
-                            fps,
-                            avg,
-                            min,
-                            max,
-                            droprate * 100.0
-                        );
-                    } else {
-                        debug!(
-                            "cube fps={} avg={} min={} max={} droprate={:.2}%",
-                            fps,
-                            avg,
-                            min,
-                            max,
-                            droprate * 100.0
-                        );
+                    if cube_index == cube_times.len() {
+                        cube_index = 0;
+                        let avg = cube_times.iter().sum::<i32>() / cube_times.len() as i32;
+                        let min = cube_times.iter().min().unwrap();
+                        let max = cube_times.iter().max().unwrap();
+                        let fps = 1000.0 / (avg as f32);
+                        let droprate = (dropped as f32) / cube_times.len() as f32;
+                        dropped = 0;
+
+                        if droprate > 0.05 {
+                            error!(
+                                "cube fps={} avg={} min={} max={} droprate={:.2}%",
+                                fps,
+                                avg,
+                                min,
+                                max,
+                                droprate * 100.0
+                            );
+                        } else if droprate > 0.025 {
+                            warn!(
+                                "cube fps={} avg={} min={} max={} droprate={:.2}%",
+                                fps,
+                                avg,
+                                min,
+                                max,
+                                droprate * 100.0
+                            );
+                        } else {
+                            debug!(
+                                "cube fps={} avg={} min={} max={} droprate={:.2}%",
+                                fps,
+                                avg,
+                                min,
+                                max,
+                                droprate * 100.0
+                            );
+                        }
+                    }
+
+                    let encoded = format_cube(cubemsg, &ctx.radar_frame_id)?;
+                    match cube_publisher.put(encoded).res_async().await {
+                        Ok(_) => trace!("RadarCube Message Sent"),
+                        Err(e) => error!("RadarCube Message Error: {:?}", e),
                     }
                 }
-
-                let encoded = format_cube(cubemsg, &ctx.radar_frame_id)?;
-                match cube_publisher.put(encoded).res_async().await {
-                    Ok(_) => trace!("RadarCube Message Sent"),
-                    Err(e) => error!("RadarCube Message Error: {:?}", e),
+                Ok(None) => (),
+                Err(err) => {
+                    dropped += 1;
+                    error!("Cube Error: {:?}", err);
                 }
-            }
-            Ok(None) => (),
-            Err(err) => {
-                dropped += 1;
-                error!("Cube Error: {:?}", err);
             }
         }
     }
@@ -982,11 +991,9 @@ fn format_cube(cubemsg: RadarCube, frame_id: &str) -> Result<Value, cdr::Error> 
 /// bulk reads of UDP packets.  This is not available on other platforms.
 #[cfg(target_os = "linux")]
 async fn port5(tx: Sender<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
-    use libc::{sched_param, SCHED_FIFO};
-    use std::{mem, os::fd::AsRawFd, time::Duration};
+    use std::{os::fd::AsRawFd, time::Duration};
 
-    const VLEN: usize = 50;
-    const BUFLEN: usize = 1500;
+    const VLEN: usize = 64;
     const RETRY_TIME: Duration = Duration::from_micros(250);
 
     let mut vlen_history = [0; 1000];
@@ -1014,41 +1021,16 @@ async fn port5(tx: Sender<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
         };
         VLEN
     ];
-    let mut bufs = vec![[0; BUFLEN]; VLEN];
+    let mut buf = vec![0; VLEN * SMS_PACKET_SIZE];
 
-    let mut param = sched_param { sched_priority: 10 };
-    let pid = unsafe { libc::pthread_self() };
-    let err =
-        unsafe { libc::pthread_setschedparam(pid, SCHED_FIFO, &mut param as *mut sched_param) };
-    if err != 0 {
-        let err = std::io::Error::last_os_error();
-        warn!("unable to set port5 real-time fifo scheduler: {}", err);
-    }
-
+    common::set_process_priority();
     let sock = UdpSocket::bind("0.0.0.0:50005").await.unwrap();
-
-    let maxbuf: libc::c_int = 2 * 1024 * 1024;
-    let err = unsafe {
-        libc::setsockopt(
-            sock.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_RCVBUFFORCE,
-            &maxbuf as *const _ as *const libc::c_void,
-            mem::size_of_val(&maxbuf) as libc::socklen_t,
-        )
-    };
-    if err != 0 {
-        let err = std::io::Error::last_os_error();
-        warn!(
-            "unable to set port5 socket buffer size to {}: {}",
-            maxbuf, err
-        );
-    }
+    let sock = common::set_socket_bufsize(sock, 2 * 1024 * 1024);
 
     loop {
         for i in 0..VLEN {
-            iovecs[i].iov_base = bufs[i].as_mut_ptr() as *mut libc::c_void;
-            iovecs[i].iov_len = BUFLEN;
+            iovecs[i].iov_base = buf[i * SMS_PACKET_SIZE..].as_mut_ptr() as *mut libc::c_void;
+            iovecs[i].iov_len = SMS_PACKET_SIZE;
             mmsgs[i].msg_hdr.msg_iov = &mut iovecs[i];
             mmsgs[i].msg_hdr.msg_iovlen = 1;
             mmsgs[i].msg_hdr.msg_name = std::ptr::null_mut();
@@ -1084,15 +1066,12 @@ async fn port5(tx: Sender<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
                     let avg = vlen_history.iter().sum::<i32>() / vlen_history.len() as i32;
                     let min = vlen_history.iter().min().unwrap();
                     let max = vlen_history.iter().max().unwrap();
-                    trace!("recvmmsg avg={} min={} max={}", avg, min, max);
+                    debug!("recvmmsg avg={} min={} max={}", avg, min, max);
                 }
 
-                for i in 0..n as usize {
-                    let len = mmsgs[i].msg_len as usize;
-                    match tx.send(bufs[i][..len].to_vec()).await {
-                        Ok(_) => (),
-                        Err(e) => error!("port5 error: {:?}", e),
-                    }
+                match tx.send(buf[..n as usize * SMS_PACKET_SIZE].to_vec()).await {
+                    Ok(_) => (),
+                    Err(e) => error!("port5 error: {:?}", e),
                 }
             }
         }
@@ -1102,30 +1081,30 @@ async fn port5(tx: Sender<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(not(target_os = "linux"))]
 async fn port5(tx: Sender<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
     let sock = UdpSocket::bind("0.0.0.0:50005").await.unwrap();
-    let mut buf = [0; 1500];
+    let mut buf = [0; SMS_PACKET_SIZE];
 
     loop {
         match sock.recv_from(&mut buf).await {
-            Ok((n, _)) => match tx.send(buf[..n].to_vec()).await {
+            Ok((n, _)) => match tx.send(buf.to_vec()).await {
                 Ok(_) => (),
-                Err(e) => error!("port5 error: {:?}", e),
+                Err(e) => error!("port5 write error: {:?}", e),
             },
-            Err(e) => error!("port5 error: {:?}", e),
+            Err(e) => error!("port5 read error: {:?}", e),
         }
     }
 }
 
 async fn port63(tx: Sender<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
     let sock = UdpSocket::bind("0.0.0.0:50063").await.unwrap();
-    let mut buf = [0; 1500];
+    let mut buf = [0; SMS_PACKET_SIZE];
 
     loop {
         match sock.recv_from(&mut buf).await {
-            Ok((n, _)) => match tx.send(buf[..n].to_vec()).await {
+            Ok(_) => match tx.send(buf.to_vec()).await {
                 Ok(_) => (),
-                Err(e) => error!("port63 error: {:?}", e),
+                Err(e) => error!("port63 write error: {:?}", e),
             },
-            Err(e) => error!("port63 error: {:?}", e),
+            Err(e) => error!("port63 read error: {:?}", e),
         }
     }
 }
