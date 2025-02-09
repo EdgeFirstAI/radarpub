@@ -1,12 +1,12 @@
+mod can;
+mod eth;
+
 use async_std::{net::UdpSocket, task::block_on};
+use can::{read_message, read_status, write_parameter, Parameter, Status, Target};
 use cdr::{CdrLe, Infinite};
 use clap::{Parser, ValueEnum};
 use clustering::Clustering;
 use core::f64;
-use drvegrd::{
-    can::{read_message, read_status, write_parameter, Parameter, Status, Target},
-    eth::{RadarCube, RadarCubeReader, SMS_PACKET_SIZE},
-};
 use edgefirst_schemas::{
     builtin_interfaces::{self, Time},
     edgefirst_msgs::{self, RadarInfo},
@@ -14,6 +14,7 @@ use edgefirst_schemas::{
     sensor_msgs,
     std_msgs::{self, Header},
 };
+use eth::{RadarCube, RadarCubeReader, SMS_PACKET_SIZE};
 use kanal::{bounded_async as channel, AsyncReceiver, AsyncSender as Sender};
 use log::{debug, error, info, trace, warn};
 use socketcan::async_std::CanSocket;

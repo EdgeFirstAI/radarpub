@@ -17,28 +17,46 @@ inherits = "release"
 strip = false
 debug = true
 
+[[bin]]
+name = "radarpub"
+path = "src/radarpub.rs"
+required-features = ["can", "zenoh"]
+
+[[bin]]
+name = "drvegrdctl"
+path = "src/drvegrdctl.rs"
+required-features = ["can"]
+
+[[bin]]
+name = "drvegrd-rerun"
+path = "src/rerun.rs"
+required-features = ["rerun"]
+
 [features]
-default = []
+default = ["can", "zenoh"]
+can = ["dep:socketcan"]
+rerun = ["dep:rerun", "dep:etherparse", "dep:pcarp", "dep:ndarray-npy"]
+zenoh = ["dep:zenoh"]
 
 [dependencies]
-drvegrd = { git = "ssh://git@bitbucket.org/au-zone/drvegrd-rs.git", tag = "1.4.1", features = [ "can" ] }
-edgefirst-schemas = "1.2.4"
 async-std = { version = "1.12.0", features = ["attributes"] }
 cdr = "0.2.4"
 clap = { version = "4.5.28", features = ["derive", "env"] }
-log = "0.4.22"
-env_logger = "0.11.6"
-serde = "1.0.215"
-serde_derive = "1.0.215"
-socketcan = { version = "3.3.1", features = ["async-std"] }
-unix-ts = "1.0"
-zenoh = "0.10.0-rc"
-futures = "0.3.31"
-ndarray = "0.16.1"
-kanal = { git = "https://github.com/fereidani/kanal", rev = "b6aeab2" }
-libc = "0.2.167"
+crc16 = "0.4.0"
 dbscan = "0.3.1"
+edgefirst-schemas = "1.2.4"
+env_logger = "0.11.6"
+etherparse = { version = "0.16.0", optional = true }
+kanal = { git = "https://github.com/fereidani/kanal", rev = "b6aeab2" }
 lapjv = "0.2.1"
-uuid = { version = "1.11.0", features = ["v4"] }
+libc = "0.2.167"
+log = "0.4.22"
 nalgebra = "0.33.2"
-
+ndarray = "0.16.1"
+ndarray-npy = { version = "0.9.1", optional = true }
+num = "0.4.1"
+pcarp = { version = "2.0.0", optional = true }
+rerun = { version = "0.22.0", optional = true }
+socketcan = { version = "3.5.0", features = ["async-std"], optional = true }
+uuid = { version = "1.11.0", features = ["v4"] }
+zenoh = { version = "0.10.0-rc", optional = true }
