@@ -1,8 +1,9 @@
 use crc16::{State, CCITT_FALSE};
 use log::{debug, trace};
-use socketcan::{async_std::CanSocket, CanFrame, EmbeddedFrame, Id as CanId, StandardId};
+use socketcan::{tokio::CanSocket, CanFrame, EmbeddedFrame, Id as CanId, StandardId};
 use std::{fmt, io};
 
+#[allow(unused)]
 #[derive(Debug)]
 pub enum Error {
     Io(io::Error),
@@ -86,6 +87,7 @@ pub struct Target {
     pub noise: f64,
 }
 
+#[allow(unused)]
 #[derive(Copy, Clone)]
 enum MessageType {
     Command = 0,
@@ -95,6 +97,7 @@ enum MessageType {
     ParameterWriteRead = 4,
 }
 
+#[allow(unused)]
 #[derive(Copy, Clone, Debug)]
 pub enum Parameter {
     TxAntenna = 0,
@@ -472,9 +475,9 @@ async fn send_instruction(
     let message1_frame = CanFrame::new(id, &<[u8; 8]>::from(&message1)).unwrap();
     let message2_frame = CanFrame::new(id, &<[u8; 8]>::from(&message2)).unwrap();
 
-    sock.write_frame(&header_frame).await?;
-    sock.write_frame(&message1_frame).await?;
-    sock.write_frame(&message2_frame).await?;
+    sock.write_frame(header_frame).await?;
+    sock.write_frame(message1_frame).await?;
+    sock.write_frame(message2_frame).await?;
 
     Ok(())
 }

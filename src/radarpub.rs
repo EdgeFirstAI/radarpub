@@ -1,10 +1,14 @@
+mod args;
 mod can;
+mod clustering;
+mod common;
 mod eth;
+mod net;
 
-use async_std::{net::UdpSocket, task::block_on};
+use args::{Args, CenterFrequency, DetectionSensitivity, FrequencySweep, RangeToggle};
 use can::{read_message, read_status, write_parameter, Parameter, Status, Target};
 use cdr::{CdrLe, Infinite};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use clustering::Clustering;
 use core::f64;
 use edgefirst_schemas::{
@@ -15,24 +19,22 @@ use edgefirst_schemas::{
     std_msgs::{self, Header},
 };
 use eth::{RadarCube, RadarCubeReader, SMS_PACKET_SIZE};
-use kanal::{bounded_async as channel, AsyncReceiver, AsyncSender as Sender};
-use log::{debug, error, info, trace, warn};
-use socketcan::async_std::CanSocket;
+use kanal::{AsyncReceiver, AsyncSender};
+use socketcan::tokio::CanSocket;
 use std::{
     collections::VecDeque,
     f32::consts::PI,
-    fmt, io,
-    str::FromStr as _,
-    sync::Arc,
-    thread::{self, sleep},
-    time::{Duration, Instant},
+    thread::{self},
+    time::Duration,
 };
+use tracing::{error, event, info, info_span, instrument, warn, Instrument, Level};
+use tracing_subscriber::{layer::SubscriberExt as _, Layer as _, Registry};
+use tracy_client::{frame_mark, plot, secondary_frame_mark};
 use zenoh::{
-    config::Config,
-    prelude::{r#async::*, sync::SyncResolve},
+    bytes::{Encoding, ZBytes},
+    qos::{CongestionControl, Priority},
+    Session,
 };
-
-mod common;
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -47,318 +49,41 @@ pub enum PointFieldType {
     FLOAT64 = 8,
 }
 
-#[derive(Debug)]
-enum Error {
-    Io(io::Error),
-    InvalidCenterFrequency(u32),
-    InvalidFrequencySweep(u32),
-    InvalidRangeToggle(u32),
-    InvalidDetectionSensitivity(u32),
-}
-
-impl std::error::Error for Error {}
-
-impl From<io::Error> for Error {
-    fn from(err: io::Error) -> Error {
-        Error::Io(err)
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Error::Io(err) => write!(f, "io error: {}", err),
-            Error::InvalidCenterFrequency(value) => {
-                write!(f, "invalid center frequency: {}", value)
-            }
-            Error::InvalidFrequencySweep(value) => write!(f, "invalid frequency sweep: {}", value),
-            Error::InvalidRangeToggle(value) => write!(f, "invalid range toggle: {}", value),
-            Error::InvalidDetectionSensitivity(value) => {
-                write!(f, "invalid detection sensitivity: {}", value)
-            }
-        }
-    }
-}
-
-/// The center frequency for the radar.
-/// Note: ultra-short range is only supported with the low center frequency.
-#[derive(Copy, Clone, Debug, ValueEnum)]
-enum CenterFrequency {
-    Low = 0,
-    Medium = 1,
-    High = 2,
-}
-
-impl TryFrom<u32> for CenterFrequency {
-    type Error = Error;
-
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(CenterFrequency::Low),
-            1 => Ok(CenterFrequency::Medium),
-            2 => Ok(CenterFrequency::High),
-            _ => Err(Error::InvalidCenterFrequency(value)),
-        }
-    }
-}
-
-impl fmt::Display for CenterFrequency {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            CenterFrequency::Low => write!(f, "low"),
-            CenterFrequency::Medium => write!(f, "medium"),
-            CenterFrequency::High => write!(f, "high"),
-        }
-    }
-}
-
-/// The frequency sweep which controls the range of the radar.
-/// Note: ultra-short range is only supported with the low center frequency.
-#[derive(Copy, Clone, Debug, ValueEnum)]
-enum FrequencySweep {
-    Long = 0,
-    Medium = 1,
-    Short = 2,
-    UltraShort = 3,
-}
-
-impl TryFrom<u32> for FrequencySweep {
-    type Error = Error;
-
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(FrequencySweep::Long),
-            1 => Ok(FrequencySweep::Medium),
-            2 => Ok(FrequencySweep::Short),
-            3 => Ok(FrequencySweep::UltraShort),
-            _ => Err(Error::InvalidFrequencySweep(value)),
-        }
-    }
-}
-
-impl fmt::Display for FrequencySweep {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            FrequencySweep::Long => write!(f, "long"),
-            FrequencySweep::Medium => write!(f, "medium"),
-            FrequencySweep::Short => write!(f, "short"),
-            FrequencySweep::UltraShort => write!(f, "ultra-short"),
-        }
-    }
-}
-
-/// The range toggle mode allows the radar to alternate between various
-/// frequency sweeps at runtime.
-#[derive(Copy, Clone, Debug, ValueEnum)]
-enum RangeToggle {
-    Off = 0,
-    ShortMedium = 1,
-    ShortLong = 2,
-    MediumLong = 3,
-    LongUltraShort = 4,
-    MediumUltraShort = 5,
-    ShortUltraShort = 6,
-}
-
-impl TryFrom<u32> for RangeToggle {
-    type Error = Error;
-
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(RangeToggle::Off),
-            1 => Ok(RangeToggle::ShortMedium),
-            2 => Ok(RangeToggle::ShortLong),
-            3 => Ok(RangeToggle::MediumLong),
-            4 => Ok(RangeToggle::LongUltraShort),
-            5 => Ok(RangeToggle::MediumUltraShort),
-            6 => Ok(RangeToggle::ShortUltraShort),
-            _ => Err(Error::InvalidRangeToggle(value)),
-        }
-    }
-}
-
-impl fmt::Display for RangeToggle {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            RangeToggle::Off => write!(f, "off"),
-            RangeToggle::ShortMedium => write!(f, "short-medium"),
-            RangeToggle::ShortLong => write!(f, "short-long"),
-            RangeToggle::MediumLong => write!(f, "medium-long"),
-            RangeToggle::LongUltraShort => write!(f, "long-ultra-short"),
-            RangeToggle::MediumUltraShort => write!(f, "medium-ultra-short"),
-            RangeToggle::ShortUltraShort => write!(f, "short-ultra-short"),
-        }
-    }
-}
-
-/// The detection sensitivity controls the radar's ability to detect targets.
-#[derive(Copy, Clone, Debug, ValueEnum)]
-enum DetectionSensitivity {
-    Low = 0,
-    Medium = 1,
-    High = 2,
-}
-
-impl TryFrom<u32> for DetectionSensitivity {
-    type Error = Error;
-
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(DetectionSensitivity::Low),
-            1 => Ok(DetectionSensitivity::Medium),
-            2 => Ok(DetectionSensitivity::High),
-            _ => Err(Error::InvalidDetectionSensitivity(value)),
-        }
-    }
-}
-
-impl fmt::Display for DetectionSensitivity {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            DetectionSensitivity::Low => write!(f, "low"),
-            DetectionSensitivity::Medium => write!(f, "medium"),
-            DetectionSensitivity::High => write!(f, "high"),
-        }
-    }
-}
-
-#[derive(Parser, Debug, Clone)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    /// zenoh connection mode
-    #[arg(long, default_value = "client")]
-    mode: String,
-
-    /// connect to endpoint
-    #[arg(short, long, default_value = "tcp/127.0.0.1:7447")]
-    endpoint: Vec<String>,
-
-    /// radar targets topic name
-    #[arg(long, default_value = "rt/radar/targets")]
-    targets_topic: String,
-
-    /// radar clusters topic name
-    #[arg(long, default_value = "rt/radar/clusters")]
-    clusters_topic: String,
-
-    /// radar data cube topic name
-    #[arg(long, default_value = "rt/radar/cube")]
-    cube_topic: String,
-
-    /// can device connected to radar
-    #[arg(long, default_value = "can0")]
-    can: String,
-
-    /// mirror the radar data
-    #[arg(long, env)]
-    mirror: bool,
-
-    /// radar frame transform vector from base_link
-    #[arg(
-        long,
-        env,
-        default_value = "0 0 0",
-        value_delimiter = ' ',
-        num_args = 3
-    )]
-    radar_tf_vec: Vec<f64>,
-
-    /// radar frame transform quaternion from base_link
-    #[arg(
-        long,
-        env,
-        default_value = "0 0 0 1",
-        value_delimiter = ' ',
-        num_args = 4
-    )]
-    radar_tf_quat: Vec<f64>,
-
-    /// The name of the base frame
-    #[arg(long, env, default_value = "base_link")]
-    base_frame_id: String,
-
-    /// The name of the radar frame
-    #[arg(long, env, default_value = "radar")]
-    radar_frame_id: String,
-
-    /// The center frequency for the radar.
-    #[arg(long, env, default_value = "medium")]
-    center_frequency: CenterFrequency,
-
-    /// The frequency sweep which controls the range of the radar.
-    #[arg(long, env, default_value = "short")]
-    frequency_sweep: FrequencySweep,
-
-    /// The range toggle mode allows the radar to alternate between various
-    /// frequencies.
-    #[arg(long, env, default_value = "off")]
-    range_toggle: RangeToggle,
-
-    /// The detection sensitivity controls the radar's ability to detect
-    /// targets.
-    #[arg(long, env, default_value = "medium")]
-    detection_sensitivity: DetectionSensitivity,
-
-    /// Enable streaming the low-level radar data cube on the cube_topic.
-    #[arg(long, env, default_value = "false")]
-    cube: bool,
-
-    /// Enable radar target clustering task.
-    #[arg(long, env, default_value = "false")]
-    clustering: bool,
-
-    /// Clustering window size in frames (one frame is 55ms).
-    #[arg(long, env, default_value = "6")]
-    window_size: usize,
-
-    /// Clustering DBSCAN distance limit (euclidean distance)
-    #[arg(long, env, default_value = "1")]
-    clustering_eps: f64,
-
-    /// Clustering DBSCAN parameter scaling. Parameter order is x, y, z, speed.
-    /// Set the appropriate axis to 0 to ignore that axis
-    #[arg(
-        long,
-        env,
-        default_value = "1 1 0 0",
-        value_delimiter = ' ',
-        num_args = 4
-    )]
-    clustering_param_scale: Vec<f32>,
-
-    /// Clustering DBSCAN point limit. Minimum 3
-    #[arg(long, env, default_value = "5")]
-    clustering_point_limit: usize,
-}
-
-struct Context {
-    session: Arc<Session>,
-    topic: String,
-    radar_frame_id: String,
-}
-
-#[async_std::main]
+#[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    env_logger::init();
 
-    let mut config = Config::default();
-    let mode = WhatAmI::from_str(&args.mode).unwrap();
-    config.set_mode(Some(mode)).unwrap();
-    config.connect.endpoints = args.endpoint.iter().map(|v| v.parse().unwrap()).collect();
-    let _ = config.scouting.multicast.set_enabled(Some(false));
-    let session = zenoh::open(config).res_async().await.unwrap().into_arc();
-    debug!("Opened Zenoh session");
+    args.tracy.then(tracy_client::Client::start);
 
-    let sock = CanSocket::open(&args.can)?;
+    let stdout_log = tracing_subscriber::fmt::layer()
+        .pretty()
+        .with_filter(args.rust_log);
 
-    let software_generation = read_status(&sock, Status::SoftwareGeneration)
-        .await
-        .unwrap();
-    let major_version = read_status(&sock, Status::MajorVersion).await.unwrap();
-    let minor_version = read_status(&sock, Status::MinorVersion).await.unwrap();
-    let patch_version = read_status(&sock, Status::PatchVersion).await.unwrap();
-    let serial_number = read_status(&sock, Status::SerialNumber).await.unwrap();
+    let journald = match tracing_journald::layer() {
+        Ok(journald) => Some(journald.with_filter(args.rust_log)),
+        Err(_) => None,
+    };
+
+    let tracy = match args.tracy {
+        true => Some(tracing_tracy::TracyLayer::default().with_filter(args.rust_log)),
+        false => None,
+    };
+
+    let subscriber = Registry::default()
+        .with(stdout_log)
+        .with(journald)
+        .with(tracy);
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+    tracing_log::LogTracer::init()?;
+
+    let session = zenoh::open(args.clone()).await.unwrap();
+    let can = CanSocket::open(&args.can)?;
+
+    let software_generation = read_status(&can, Status::SoftwareGeneration).await.unwrap();
+    let major_version = read_status(&can, Status::MajorVersion).await.unwrap();
+    let minor_version = read_status(&can, Status::MinorVersion).await.unwrap();
+    let patch_version = read_status(&can, Status::PatchVersion).await.unwrap();
+    let serial_number = read_status(&can, Status::SerialNumber).await.unwrap();
     info!("Software Generation: {}", software_generation);
     info!(
         "Version: {}.{}.{}",
@@ -367,24 +92,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Serial Number: {}", serial_number);
 
     let center_frequency = write_parameter(
-        &sock,
+        &can,
         Parameter::CenterFrequency,
         args.center_frequency as u32,
     )
     .await?;
 
-    let frequency_sweep = write_parameter(
-        &sock,
-        Parameter::FrequencySweep,
-        args.frequency_sweep as u32,
-    )
-    .await?;
+    let frequency_sweep =
+        write_parameter(&can, Parameter::FrequencySweep, args.frequency_sweep as u32).await?;
 
     let range_toggle =
-        write_parameter(&sock, Parameter::RangeToggle, args.range_toggle as u32).await?;
+        write_parameter(&can, Parameter::RangeToggle, args.range_toggle as u32).await?;
 
     let detection_sensitivity = write_parameter(
-        &sock,
+        &can,
         Parameter::DetectionSensitivity,
         args.detection_sensitivity as u32,
     )
@@ -398,31 +119,66 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         DetectionSensitivity::try_from(detection_sensitivity).unwrap()
     );
 
-    spawn_tf_static(session.clone(), &args).await.unwrap();
-    spawn_radar_info(session.clone(), &args).await.unwrap();
-
-    let targets_publisher = match session
-        .declare_publisher(args.targets_topic.clone())
-        .priority(Priority::DataHigh)
-        .congestion_control(CongestionControl::Drop)
-        .res_async()
-        .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            error!("Failed to create publisher {}: {:?}", args.targets_topic, e);
-            return Err(e);
-        }
+    let tf_session = session.clone();
+    let tf_msg = TransformStamped {
+        header: Header {
+            frame_id: args.base_frame_id.clone(),
+            stamp: timestamp().unwrap_or(Time { sec: 0, nanosec: 0 }),
+        },
+        child_frame_id: args.radar_frame_id.clone(),
+        transform: Transform {
+            translation: Vector3 {
+                x: args.radar_tf_vec[0],
+                y: args.radar_tf_vec[1],
+                z: args.radar_tf_vec[2],
+            },
+            rotation: Quaternion {
+                x: args.radar_tf_quat[0],
+                y: args.radar_tf_quat[1],
+                z: args.radar_tf_quat[2],
+                w: args.radar_tf_quat[3],
+            },
+        },
     };
+    let tf_msg = ZBytes::from(cdr::serialize::<_, _, CdrLe>(&tf_msg, Infinite).unwrap());
+    let tf_enc = Encoding::APPLICATION_CDR.with_schema("geometry_msgs/msg/TransformStamped");
+    let tf_task = tokio::spawn(async move { tf_static(tf_session, tf_msg, tf_enc).await.unwrap() });
+    std::mem::drop(tf_task);
+
+    let info_msg = RadarInfo {
+        header: Header {
+            frame_id: args.base_frame_id.clone(),
+            stamp: timestamp().unwrap_or(Time { sec: 0, nanosec: 0 }),
+        },
+        center_frequency: args.center_frequency.to_string(),
+        frequency_sweep: args.frequency_sweep.to_string(),
+        range_toggle: args.range_toggle.to_string(),
+        detection_sensitivity: args.detection_sensitivity.to_string(),
+        cube: args.cube,
+    };
+
+    let info_session = session.clone();
+    let info_msg = ZBytes::from(cdr::serialize::<_, _, CdrLe>(&info_msg, Infinite).unwrap());
+    let info_enc = Encoding::APPLICATION_CDR.with_schema("edgefirst_msgs/msg/RadarInfo");
+    let tf_task =
+        tokio::spawn(async move { radar_info(info_session, info_msg, info_enc).await.unwrap() });
+    std::mem::drop(tf_task);
 
     let clustering = if args.clustering {
         let session = session.clone();
         let args = args.clone();
-        let (tx, rx) = channel(10000);
+        let (tx, rx) = kanal::bounded_async(16);
 
         thread::Builder::new()
-            .name("clustering".to_string())
-            .spawn(move || block_on(clustering_task(session, &args, rx)).unwrap())?;
+            .name("cluster".to_string())
+            .spawn(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(clustering_task(session, args, rx))
+                    .unwrap();
+            })?;
 
         Some(tx)
     } else {
@@ -430,67 +186,76 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if args.cube {
-        let ctx = Context {
-            session: session.clone(),
-            topic: args.cube_topic.clone(),
-            radar_frame_id: args.radar_frame_id.clone(),
-        };
+        let session = session.clone();
+        let topic = args.cube_topic.clone();
+        let frame_id = args.radar_frame_id.clone();
 
         thread::Builder::new()
-            .name("radarcube".to_string())
+            .name("cube".to_string())
             .spawn(move || {
-                block_on(udp_loop(ctx)).unwrap();
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(cube_loop(session, topic, frame_id, args.tracy))
+                    .unwrap();
             })?;
     }
 
+    let stream_task = stream(can, session, args, clustering);
+    stream_task.await.unwrap();
+
+    Ok(())
+}
+
+async fn stream(
+    can: CanSocket,
+    session: Session,
+    args: Args,
+    clustering: Option<AsyncSender<Vec<Target>>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let targets_publisher = session
+        .declare_publisher(args.targets_topic.clone())
+        .priority(Priority::DataHigh)
+        .congestion_control(CongestionControl::Drop)
+        .await
+        .unwrap();
+
     loop {
-        match read_message(&sock).await {
-            Err(err) => println!("Error: {:?}", err),
+        match read_message(&can).await {
+            Err(err) => error!("canbus error: {:?}", err),
             Ok(frame) => {
-                trace!("Received radar frame: {:?}", frame);
-
-                let min = frame.targets[..frame.header.n_targets]
-                    .iter()
-                    .map(|tgt| tgt.power)
-                    .reduce(f64::min)
-                    .unwrap_or(f64::NAN);
-                let max = frame.targets[..frame.header.n_targets]
-                    .iter()
-                    .map(|tgt| tgt.power)
-                    .reduce(f64::max)
-                    .unwrap_or(f64::NAN);
-                let avg = frame.targets[..frame.header.n_targets]
-                    .iter()
-                    .map(|tgt| tgt.power)
-                    .sum::<f64>()
-                    / frame.header.n_targets as f64;
-
-                trace!(
-                    "Processing radar frame with {} targets - power: min={} max={} avg={}",
-                    frame.header.n_targets,
-                    min,
-                    max,
-                    avg
-                );
-
                 let targets = &frame.targets[..frame.header.n_targets];
+                args.tracy.then(|| plot!("targets", targets.len() as f64));
 
                 if let Some(tx) = &clustering {
                     tx.send(targets.to_vec()).await.unwrap();
                 }
 
-                let targets = format_targets(targets, args.mirror, &args.radar_frame_id)?;
+                let (msg, enc) = format_targets(targets, args.mirror, &args.radar_frame_id)?;
 
-                match targets_publisher.put(targets).res_async().await {
-                    Ok(_) => trace!("{} message sent", args.targets_topic),
-                    Err(e) => error!("{} message error: {:?}", args.targets_topic, e),
+                let span = info_span!("targets_publish");
+                async {
+                    match targets_publisher.put(msg).encoding(enc).await {
+                        Ok(_) => {}
+                        Err(e) => error!("{} publish error: {:?}", args.targets_topic, e),
+                    }
                 }
+                .instrument(span)
+                .await;
+
+                args.tracy.then(frame_mark);
             }
         }
     }
 }
 
-fn format_targets(targets: &[Target], mirror: bool, frame_id: &str) -> Result<Value, cdr::Error> {
+#[instrument(skip_all)]
+fn format_targets(
+    targets: &[Target],
+    mirror: bool,
+    frame_id: &str,
+) -> Result<(ZBytes, Encoding), cdr::Error> {
     let n_targets = targets.len() as u32;
     let data: Vec<_> = targets
         .iter()
@@ -567,300 +332,228 @@ fn format_targets(targets: &[Target], mirror: bool, frame_id: &str) -> Result<Va
         is_dense: true,
     };
 
-    let encoded = cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?;
-    let encoded = Value::from(encoded).encoding(Encoding::WithSuffix(
-        KnownEncoding::AppOctetStream,
-        "sensor_msgs/msg/PointCloud2".into(),
-    ));
+    let msg = ZBytes::from(cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?);
+    let enc = Encoding::APPLICATION_CDR.with_schema("sensor_msgs/msg/PointCloud2");
 
-    Ok(encoded)
+    Ok((msg, enc))
 }
 
-async fn spawn_tf_static(
-    session: Arc<zenoh::Session>,
-    args: &Args,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let publisher = match session
-        .declare_publisher("rt/tf_static".to_string())
-        .priority(Priority::Background)
-        .congestion_control(CongestionControl::Drop)
-        .res_async()
-        .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            error!("Failed to create publisher rt/tf_static: {:?}", e);
-            return Err(e);
-        }
-    };
-
-    let msg = TransformStamped {
-        header: Header {
-            frame_id: args.base_frame_id.clone(),
-            stamp: timestamp().unwrap_or(Time { sec: 0, nanosec: 0 }),
-        },
-        child_frame_id: args.radar_frame_id.clone(),
-        transform: Transform {
-            translation: Vector3 {
-                x: args.radar_tf_vec[0],
-                y: args.radar_tf_vec[1],
-                z: args.radar_tf_vec[2],
-            },
-            rotation: Quaternion {
-                x: args.radar_tf_quat[0],
-                y: args.radar_tf_quat[1],
-                z: args.radar_tf_quat[2],
-                w: args.radar_tf_quat[3],
-            },
-        },
-    };
-
-    let msg =
-        Value::from(cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?).encoding(Encoding::WithSuffix(
-            KnownEncoding::AppOctetStream,
-            "geometry_msgs/msg/TransformStamped".into(),
-        ));
-
-    thread::spawn(move || {
-        let interval = Duration::from_secs(1);
-        let mut target_time = Instant::now() + interval;
-
-        loop {
-            publisher.put(msg.clone()).res_sync().unwrap();
-            trace!("radarpub publishing rt/tf_static");
-            sleep(target_time.duration_since(Instant::now()));
-            target_time += interval
-        }
-    });
-
-    Ok(())
-}
-
-async fn spawn_radar_info(
-    session: Arc<zenoh::Session>,
-    args: &Args,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let publisher = match session
-        .declare_publisher("rt/radar/info".to_string())
-        .priority(Priority::Background)
-        .congestion_control(CongestionControl::Drop)
-        .res_async()
-        .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            error!("Failed to create publisher rt/radar/info: {:?}", e);
-            return Err(e);
-        }
-    };
-
-    let msg = RadarInfo {
-        header: Header {
-            frame_id: args.base_frame_id.clone(),
-            stamp: timestamp().unwrap_or(Time { sec: 0, nanosec: 0 }),
-        },
-        center_frequency: args.center_frequency.to_string(),
-        frequency_sweep: args.frequency_sweep.to_string(),
-        range_toggle: args.range_toggle.to_string(),
-        detection_sensitivity: args.detection_sensitivity.to_string(),
-        cube: args.cube,
-    };
-
-    let msg =
-        Value::from(cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?).encoding(Encoding::WithSuffix(
-            KnownEncoding::AppOctetStream,
-            "edgefirst_msgs/msg/RadarInfo".into(),
-        ));
-
-    thread::spawn(move || {
-        let interval = Duration::from_secs(1);
-        let mut target_time = Instant::now() + interval;
-
-        loop {
-            publisher.put(msg.clone()).res_sync().unwrap();
-            trace!("radarpub publishing rt/radar/info");
-            sleep(target_time.duration_since(Instant::now()));
-            target_time += interval
-        }
-    });
-
-    Ok(())
-}
-
-mod clustering;
 async fn clustering_task(
-    session: Arc<zenoh::Session>,
-    args: &Args,
+    session: Session,
+    args: Args,
     rx: AsyncReceiver<Vec<Target>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let publisher = session
+        .declare_publisher(&args.clusters_topic)
+        .priority(Priority::DataHigh)
+        .congestion_control(CongestionControl::Drop)
+        .await
+        .unwrap();
+
     let mut window = VecDeque::<Vec<Target>>::with_capacity(args.window_size);
     let mut clustering = Clustering::new(
         args.clustering_eps,
         &args.clustering_param_scale,
         args.clustering_point_limit,
     );
+
     loop {
-        if window.len() == args.window_size {
-            window.pop_front();
-        }
-
         let targets: Vec<Target> = rx.recv().await.unwrap();
-        window.push_back(targets);
-        let targets: Vec<&Target> = window.iter().flat_map(|v| v.iter()).collect::<Vec<_>>();
-        let dbscantargets: Vec<_> = targets
-            .iter()
-            .map(|t| {
-                let [x, y, z] = transform_xyz(
-                    t.range as f32,
-                    t.azimuth as f32,
-                    t.elevation as f32,
-                    args.mirror,
-                );
-
-                let mut v = [x, y, z, t.speed as f32];
-                for (i, val) in v.iter_mut().enumerate() {
-                    *val *= args.clustering_param_scale[i];
-                }
-                v
-            })
-            .collect();
         let time = timestamp()?;
-        let dbscan_clusters = clustering
-            .cluster(dbscantargets, time.to_nanos())
-            .into_iter()
-            .map(|v| v[4]);
 
-        let data: Vec<_> = targets
-            .iter()
-            .zip(dbscan_clusters)
-            .flat_map(|(target, cluster)| {
-                let xyz = transform_xyz(
-                    target.range as f32,
-                    target.azimuth as f32,
-                    target.elevation as f32,
-                    args.mirror,
-                );
-                [
-                    xyz[0],
-                    xyz[1],
-                    xyz[2],
-                    target.speed as f32,
-                    target.power as f32,
-                    target.rcs as f32,
-                    cluster,
-                ]
-            })
-            .flat_map(|elem| elem.to_ne_bytes())
-            .collect();
-        let fields = vec![
-            sensor_msgs::PointField {
-                name: String::from("x"),
-                offset: 0,
-                datatype: PointFieldType::FLOAT32 as u8,
-                count: 1,
-            },
-            sensor_msgs::PointField {
-                name: String::from("y"),
-                offset: 4,
-                datatype: PointFieldType::FLOAT32 as u8,
-                count: 1,
-            },
-            sensor_msgs::PointField {
-                name: String::from("z"),
-                offset: 8,
-                datatype: PointFieldType::FLOAT32 as u8,
-                count: 1,
-            },
-            sensor_msgs::PointField {
-                name: String::from("speed"),
-                offset: 12,
-                datatype: PointFieldType::FLOAT32 as u8,
-                count: 1,
-            },
-            sensor_msgs::PointField {
-                name: String::from("power"),
-                offset: 16,
-                datatype: PointFieldType::FLOAT32 as u8,
-                count: 1,
-            },
-            sensor_msgs::PointField {
-                name: String::from("rcs"),
-                offset: 20,
-                datatype: PointFieldType::FLOAT32 as u8,
-                count: 1,
-            },
-            sensor_msgs::PointField {
-                name: String::from("cluster_id"),
-                offset: 24,
-                datatype: PointFieldType::FLOAT32 as u8,
-                count: 1,
-            },
-        ];
+        let (targets, clusters) = info_span!("clustering").in_scope(|| {
+            if window.len() == args.window_size {
+                window.pop_front();
+            }
+            window.push_back(targets);
 
-        let msg = sensor_msgs::PointCloud2 {
-            header: std_msgs::Header {
-                stamp: time,
-                frame_id: args.radar_frame_id.clone(),
-            },
-            height: 1,
-            width: targets.len() as u32,
-            fields,
-            is_bigendian: false,
-            point_step: 28,
-            row_step: 28 * targets.len() as u32,
-            data,
-            is_dense: true,
-        };
-        let encoded = cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?;
+            let targets = window.iter().flat_map(|v| v.iter()).collect::<Vec<_>>();
+            let dbscantargets: Vec<_> = targets
+                .iter()
+                .map(|t| {
+                    let [x, y, z] = transform_xyz(
+                        t.range as f32,
+                        t.azimuth as f32,
+                        t.elevation as f32,
+                        args.mirror,
+                    );
 
-        match session
-            .put(&args.clusters_topic, encoded)
-            .encoding(Encoding::WithSuffix(
-                KnownEncoding::AppOctetStream,
-                "sensor_msgs/msg/PointCloud2".into(),
-            ))
-            .res_async()
-            .await
-        {
-            Ok(_) => trace!("{} message sent", args.clusters_topic),
-            Err(e) => error!("{} message error: {:?}", args.clusters_topic, e),
+                    let mut v = [x, y, z, t.speed as f32];
+                    for (i, val) in v.iter_mut().enumerate() {
+                        *val *= args.clustering_param_scale[i];
+                    }
+                    v
+                })
+                .collect();
+            let clusters = clustering
+                .cluster(dbscantargets, time.to_nanos())
+                .into_iter()
+                .map(|v| v[4]);
+
+            (targets, clusters)
+        });
+
+        let (msg, enc) = format_clusters(
+            time,
+            &targets,
+            clusters,
+            args.mirror,
+            args.radar_frame_id.clone(),
+        )?;
+
+        let span = info_span!("clusters_publish");
+        async {
+            match publisher.put(msg).encoding(enc).await {
+                Ok(_) => {}
+                Err(e) => error!("{} message error: {:?}", args.clusters_topic, e),
+            }
         }
+        .instrument(span)
+        .await;
+
+        args.tracy.then(|| secondary_frame_mark!("clustering"));
     }
 }
 
-async fn udp_loop(ctx: Context) -> Result<(), Box<dyn std::error::Error>> {
-    let cube_publisher = match ctx
-        .session
-        .declare_publisher(ctx.topic.clone())
+#[instrument(skip_all)]
+fn format_clusters<T: Iterator<Item = f32>>(
+    time: Time,
+    targets: &[&Target],
+    clusters: T,
+    mirror: bool,
+    frame_id: String,
+) -> Result<(ZBytes, Encoding), cdr::Error> {
+    let data: Vec<_> = targets
+        .iter()
+        .zip(clusters)
+        .flat_map(|(target, cluster)| {
+            let xyz = transform_xyz(
+                target.range as f32,
+                target.azimuth as f32,
+                target.elevation as f32,
+                mirror,
+            );
+            [
+                xyz[0],
+                xyz[1],
+                xyz[2],
+                target.speed as f32,
+                target.power as f32,
+                target.rcs as f32,
+                cluster,
+            ]
+        })
+        .flat_map(|elem| elem.to_ne_bytes())
+        .collect();
+    let fields = vec![
+        sensor_msgs::PointField {
+            name: String::from("x"),
+            offset: 0,
+            datatype: PointFieldType::FLOAT32 as u8,
+            count: 1,
+        },
+        sensor_msgs::PointField {
+            name: String::from("y"),
+            offset: 4,
+            datatype: PointFieldType::FLOAT32 as u8,
+            count: 1,
+        },
+        sensor_msgs::PointField {
+            name: String::from("z"),
+            offset: 8,
+            datatype: PointFieldType::FLOAT32 as u8,
+            count: 1,
+        },
+        sensor_msgs::PointField {
+            name: String::from("speed"),
+            offset: 12,
+            datatype: PointFieldType::FLOAT32 as u8,
+            count: 1,
+        },
+        sensor_msgs::PointField {
+            name: String::from("power"),
+            offset: 16,
+            datatype: PointFieldType::FLOAT32 as u8,
+            count: 1,
+        },
+        sensor_msgs::PointField {
+            name: String::from("rcs"),
+            offset: 20,
+            datatype: PointFieldType::FLOAT32 as u8,
+            count: 1,
+        },
+        sensor_msgs::PointField {
+            name: String::from("cluster_id"),
+            offset: 24,
+            datatype: PointFieldType::FLOAT32 as u8,
+            count: 1,
+        },
+    ];
+
+    let msg = sensor_msgs::PointCloud2 {
+        header: std_msgs::Header {
+            stamp: time,
+            frame_id,
+        },
+        height: 1,
+        width: targets.len() as u32,
+        fields,
+        is_bigendian: false,
+        point_step: 28,
+        row_step: 28 * targets.len() as u32,
+        data,
+        is_dense: true,
+    };
+
+    let msg = ZBytes::from(cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?);
+    let enc = Encoding::APPLICATION_CDR.with_schema("sensor_msgs/msg/PointCloud2");
+
+    Ok((msg, enc))
+}
+
+async fn cube_loop(
+    session: Session,
+    topic: String,
+    frame_id: String,
+    tracy: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let cube_publisher = match session
+        .declare_publisher(&topic)
         .priority(Priority::DataHigh)
         .congestion_control(CongestionControl::Drop)
-        .res_async()
         .await
     {
         Ok(v) => v,
         Err(e) => {
-            error!("Failed to create publisher {}: {:?}", ctx.topic, e);
+            error!("Failed to create publisher {}: {:?}", topic, e);
             return Err(e);
         }
     };
 
-    let (tx5, rx) = channel(10000);
+    let (tx5, rx) = kanal::bounded_async(128);
     let tx63 = tx5.clone();
 
     thread::Builder::new()
         .name("port5".to_string())
-        .spawn(move || block_on(port5(tx5)).unwrap())?;
+        .spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(net::port5(tx5));
+        })?;
 
     thread::Builder::new()
         .name("port63".to_string())
-        .spawn(move || block_on(port63(tx63)).unwrap())?;
+        .spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(net::port63(tx63));
+        })?;
 
     let mut reader = RadarCubeReader::default();
-
-    let mut cube_times = [0; 1080];
-    let mut cube_index = 0;
-    let mut dropped = 0;
-    let mut prev_time = Instant::now();
 
     loop {
         let msg = match rx.recv().await {
@@ -873,73 +566,48 @@ async fn udp_loop(ctx: Context) -> Result<(), Box<dyn std::error::Error>> {
 
         let n_msg = msg.len() / SMS_PACKET_SIZE;
 
+        event!(Level::TRACE, event = "port5", n_msg = n_msg);
+
         for i in 0..n_msg {
             let begin = i * SMS_PACKET_SIZE;
             let end = begin + SMS_PACKET_SIZE;
-            match reader.read(&msg[begin..end]) {
+            let cubemsg = reader.read(&msg[begin..end]);
+
+            match cubemsg {
                 Ok(Some(cubemsg)) => {
-                    trace!("radar data cube with shape {:?}", cubemsg.data.shape());
+                    tracy.then(|| {
+                        plot!("cube captured data", cubemsg.data.len() as f64);
+                        plot!("cube missing data", cubemsg.missing_data as f64);
+                    });
 
-                    cube_times[cube_index] = prev_time.elapsed().as_millis() as i32;
-                    prev_time = Instant::now();
-                    cube_index += 1;
-
-                    if cube_index == cube_times.len() {
-                        cube_index = 0;
-                        let avg = cube_times.iter().sum::<i32>() / cube_times.len() as i32;
-                        let min = cube_times.iter().min().unwrap();
-                        let max = cube_times.iter().max().unwrap();
-                        let fps = 1000.0 / (avg as f32);
-                        let droprate = (dropped as f32) / cube_times.len() as f32;
-                        dropped = 0;
-
-                        if droprate > 0.05 {
-                            error!(
-                                "cube fps={} avg={} min={} max={} droprate={:.2}%",
-                                fps,
-                                avg,
-                                min,
-                                max,
-                                droprate * 100.0
-                            );
-                        } else if droprate > 0.025 {
-                            warn!(
-                                "cube fps={} avg={} min={} max={} droprate={:.2}%",
-                                fps,
-                                avg,
-                                min,
-                                max,
-                                droprate * 100.0
-                            );
-                        } else {
-                            debug!(
-                                "cube fps={} avg={} min={} max={} droprate={:.2}%",
-                                fps,
-                                avg,
-                                min,
-                                max,
-                                droprate * 100.0
-                            );
+                    if cubemsg.missing_data == 0 {
+                        let (msg, enc) = format_cube(cubemsg, &frame_id).unwrap();
+                        let span = info_span!("cube_publish");
+                        async {
+                            match cube_publisher.put(msg).encoding(enc).await {
+                                Ok(_) => {}
+                                Err(e) => error!("publish cube error: {:?}", e),
+                            }
                         }
-                    }
+                        .instrument(span)
+                        .await;
 
-                    let encoded = format_cube(cubemsg, &ctx.radar_frame_id)?;
-                    match cube_publisher.put(encoded).res_async().await {
-                        Ok(_) => trace!("RadarCube Message Sent"),
-                        Err(e) => error!("RadarCube Message Error: {:?}", e),
+                        tracy.then(|| secondary_frame_mark!("cube"));
+                    } else {
+                        warn!("dropping cube with {} missing data", cubemsg.missing_data);
                     }
                 }
                 Ok(None) => (),
                 Err(err) => {
-                    dropped += 1;
-                    error!("Cube Error: {:?}", err);
+                    error!("capture cube error: {}", err);
                 }
             }
         }
     }
 }
 
-fn format_cube(cubemsg: RadarCube, frame_id: &str) -> Result<Value, cdr::Error> {
+#[instrument(skip_all, fields(shape = cubemsg.data.shape().iter().map(|s| s.to_string()).collect::<Vec<_>>().join(" ")))]
+fn format_cube(cubemsg: RadarCube, frame_id: &str) -> Result<(ZBytes, Encoding), cdr::Error> {
     let layout = vec![
         edgefirst_msgs::radar_cube_dimension::SEQUENCE,
         edgefirst_msgs::radar_cube_dimension::RANGE,
@@ -957,7 +625,7 @@ fn format_cube(cubemsg: RadarCube, frame_id: &str) -> Result<Value, cdr::Error> 
     ];
 
     // Cast the Complex<i16> vector to a i16 vector.
-    let data = cubemsg.data.into_raw_vec();
+    let data = cubemsg.data.into_raw_vec_and_offset().0;
     let data2 =
         unsafe { Vec::from_raw_parts(data.as_ptr() as *mut i16, data.len() * 2, data.len() * 2) };
     std::mem::forget(data);
@@ -979,120 +647,10 @@ fn format_cube(cubemsg: RadarCube, frame_id: &str) -> Result<Value, cdr::Error> 
         is_complex: true,
     };
 
-    let encoded = cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?;
-    let encoded = Value::from(encoded).encoding(Encoding::WithSuffix(
-        KnownEncoding::AppOctetStream,
-        "edgefirst_msgs/msg/RadarCube".into(),
-    ));
+    let msg = ZBytes::from(cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?);
+    let enc = Encoding::APPLICATION_CDR.with_schema("edgefirst_msgs/msg/RadarCube");
 
-    Ok(encoded)
-}
-
-/// The port5 implementation on Linux uses the recvmmsg system call to enable
-/// bulk reads of UDP packets.  This is not available on other platforms.
-#[cfg(target_os = "linux")]
-async fn port5(tx: Sender<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
-    use std::{os::fd::AsRawFd, time::Duration};
-
-    const VLEN: usize = 64;
-    const RETRY_TIME: Duration = Duration::from_micros(250);
-
-    let mut mmsgs = vec![
-        libc::mmsghdr {
-            msg_hdr: libc::msghdr {
-                msg_name: std::ptr::null_mut(),
-                msg_namelen: 0,
-                msg_iov: std::ptr::null_mut(),
-                msg_iovlen: 0,
-                msg_control: std::ptr::null_mut(),
-                msg_controllen: 0,
-                msg_flags: 0,
-            },
-            msg_len: 0,
-        };
-        VLEN
-    ];
-    let mut iovecs = vec![
-        libc::iovec {
-            iov_base: std::ptr::null_mut(),
-            iov_len: 0,
-        };
-        VLEN
-    ];
-    let mut buf = vec![0; VLEN * SMS_PACKET_SIZE];
-
-    common::set_process_priority();
-    let sock = UdpSocket::bind("0.0.0.0:50005").await.unwrap();
-    let sock = common::set_socket_bufsize(sock, 2 * 1024 * 1024);
-
-    loop {
-        for i in 0..VLEN {
-            iovecs[i].iov_base = buf[i * SMS_PACKET_SIZE..].as_mut_ptr() as *mut libc::c_void;
-            iovecs[i].iov_len = SMS_PACKET_SIZE;
-            mmsgs[i].msg_hdr.msg_iov = &mut iovecs[i];
-            mmsgs[i].msg_hdr.msg_iovlen = 1;
-            mmsgs[i].msg_hdr.msg_name = std::ptr::null_mut();
-            mmsgs[i].msg_hdr.msg_namelen = 0;
-            mmsgs[i].msg_hdr.msg_control = std::ptr::null_mut();
-            mmsgs[i].msg_hdr.msg_controllen = 0;
-            mmsgs[i].msg_hdr.msg_flags = 0;
-            mmsgs[i].msg_len = 0;
-        }
-
-        match unsafe {
-            libc::recvmmsg(
-                sock.as_raw_fd(),
-                mmsgs.as_mut_ptr(),
-                VLEN as u32,
-                0,
-                std::ptr::null_mut(),
-            )
-        } {
-            -1 => {
-                let err = std::io::Error::last_os_error();
-                match err.kind() {
-                    std::io::ErrorKind::Interrupted => (),
-                    std::io::ErrorKind::WouldBlock => thread::sleep(RETRY_TIME),
-                    _ => error!("port5 error: {:?}", err),
-                }
-            }
-            n => match tx.send(buf[..n as usize * SMS_PACKET_SIZE].to_vec()).await {
-                Ok(_) => (),
-                Err(e) => error!("port5 error: {:?}", e),
-            },
-        }
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-async fn port5(tx: Sender<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
-    let sock = UdpSocket::bind("0.0.0.0:50005").await.unwrap();
-    let mut buf = [0; SMS_PACKET_SIZE];
-
-    loop {
-        match sock.recv_from(&mut buf).await {
-            Ok((n, _)) => match tx.send(buf.to_vec()).await {
-                Ok(_) => (),
-                Err(e) => error!("port5 write error: {:?}", e),
-            },
-            Err(e) => error!("port5 read error: {:?}", e),
-        }
-    }
-}
-
-async fn port63(tx: Sender<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
-    let sock = UdpSocket::bind("0.0.0.0:50063").await.unwrap();
-    let mut buf = [0; SMS_PACKET_SIZE];
-
-    loop {
-        match sock.recv_from(&mut buf).await {
-            Ok(_) => match tx.send(buf.to_vec()).await {
-                Ok(_) => (),
-                Err(e) => error!("port63 write error: {:?}", e),
-            },
-            Err(e) => error!("port63 read error: {:?}", e),
-        }
-    }
+    Ok((msg, enc))
 }
 
 fn transform_xyz(range: f32, azimuth: f32, elevation: f32, mirror: bool) -> [f32; 3] {
@@ -1105,6 +663,40 @@ fn transform_xyz(range: f32, azimuth: f32, elevation: f32, mirror: bool) -> [f32
         [x, -y, z]
     } else {
         [x, y, z]
+    }
+}
+
+async fn tf_static(
+    session: Session,
+    msg: ZBytes,
+    enc: Encoding,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let topic = "rt/tf_static".to_string();
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
+
+    loop {
+        interval.tick().await;
+        let span = info_span!("tf_static_publish");
+        async { session.put(&topic, msg.clone()).encoding(enc.clone()).await }
+            .instrument(span)
+            .await?;
+    }
+}
+
+async fn radar_info(
+    session: Session,
+    msg: ZBytes,
+    enc: Encoding,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let topic = "rt/radar/info".to_string();
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
+
+    loop {
+        interval.tick().await;
+        let span = info_span!("radar_info_publish");
+        async { session.put(&topic, msg.clone()).encoding(enc.clone()).await }
+            .instrument(span)
+            .await?;
     }
 }
 

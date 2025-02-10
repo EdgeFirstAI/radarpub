@@ -1,11 +1,12 @@
-use log::{debug, trace};
 use ndarray::{Array4, ArrayView4, Axis};
 use num::Complex;
-use std::{cmp::min, fmt, num::Wrapping};
+use std::{cmp::min, fmt, num::Wrapping, vec};
+use tracing::instrument;
 
 /// Fixed size size of the SMS UDP packets.
 pub const SMS_PACKET_SIZE: usize = 1458;
 
+#[allow(unused)]
 #[derive(Debug)]
 pub enum SMSError {
     IoError(std::io::Error),
@@ -777,6 +778,9 @@ impl<'a> BinPropertiesSlice<'a> {
 pub struct RadarCube {
     pub timestamp: u64,
     pub frame_counter: u32,
+    pub packets_captured: u16,
+    pub packets_skipped: u16,
+    pub missing_data: usize,
     pub bin_properties: BinProperties,
     pub data: ndarray::Array4<Complex<i16>>,
 }
@@ -799,10 +803,12 @@ pub struct RadarCubeReader {
     first_message: Wrapping<u16>,
     message_counter: Wrapping<u16>,
     received_messages: Wrapping<u16>,
-    dropped: Wrapping<u16>,
+    packets_captured: Wrapping<u16>,
+    packets_skipped: Wrapping<u16>,
     error: Option<SMSError>,
     cube_header: Option<CubeHeader>,
     cube_index: usize,
+    cube_captured: usize,
     cube: Vec<Complex<i16>>,
 }
 
@@ -820,179 +826,193 @@ impl RadarCubeReader {
             first_message: Wrapping(0),
             message_counter: Wrapping(0),
             received_messages: Wrapping(0),
-            dropped: Wrapping(0),
+            packets_captured: Wrapping(0),
+            packets_skipped: Wrapping(0),
             error: None,
             cube_header: None,
             cube_index: 0,
-            cube: Vec::new(),
+            cube_captured: 0,
+            cube: vec![],
         }
     }
 
-    pub fn read(&mut self, slice: &[u8]) -> Result<Option<RadarCube>, SMSError> {
-        let transport = TransportHeaderSlice::from_slice(slice)?;
-        let debug_header = transport.debug_header()?.to_header();
+    #[instrument(skip_all)]
+    fn start_of_frame(
+        &mut self,
+        transport: &TransportHeaderSlice,
+        debug_header: &DebugHeaderSlice,
+    ) -> Result<Option<RadarCube>, SMSError> {
+        *self = Self::default();
+        self.timestamp = transport.port_header()?.timestamp();
+        self.frame_counter = debug_header.frame_counter();
+        self.first_message = transport.message_counter().unwrap();
+        self.message_counter = self.first_message;
+        self.received_messages = Wrapping(1);
+        self.cube_header = Some(transport.cube_header()?.to_header());
+        self.cube = vec![Complex::<i16>::new(32767, 32767); self.volume()?];
+        // .resize(self.volume()?, Complex::<i16>::new(32767, 32767));
+        let cube: Vec<u32> = transport
+            .cube_header()?
+            .payload()
+            .chunks_exact(4)
+            .map(|chunk| u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect();
+        let cube =
+            unsafe { std::slice::from_raw_parts(cube.as_ptr() as *const Complex<i16>, cube.len()) };
+        self.cube[..cube.len()].copy_from_slice(cube);
+        self.cube_index = cube.len();
+        self.cube_captured = cube.len();
+        self.packets_captured = Wrapping(1);
 
-        match debug_header.flags {
-            DebugHeader::START_OF_FRAME => {
-                *self = Self::default();
-                self.timestamp = transport.port_header()?.timestamp();
-                self.frame_counter = debug_header.frame_counter;
-                self.first_message = transport.message_counter().unwrap();
-                self.message_counter = self.first_message;
-                self.received_messages = Wrapping(1);
-                self.cube_header = Some(transport.cube_header()?.to_header());
-                self.cube
-                    .resize(self.volume()?, Complex::<i16>::new(32767, 32767));
-                let cube: Vec<u32> = transport
-                    .cube_header()?
-                    .payload()
-                    .chunks_exact(4)
-                    .map(|chunk| u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-                    .collect();
-                let cube = unsafe {
-                    std::slice::from_raw_parts(cube.as_ptr() as *const Complex<i16>, cube.len())
-                };
-                self.cube[..cube.len()].copy_from_slice(cube);
-                self.cube_index = cube.len();
+        Ok(None)
+    }
+
+    #[instrument(skip_all)]
+    fn frame_footer(
+        &mut self,
+        transport: &TransportHeaderSlice,
+        debug_header: &DebugHeaderSlice,
+    ) -> Result<Option<RadarCube>, SMSError> {
+        if self.cube_header.is_none() {
+            *self = Self::default();
+            return Err(SMSError::CubeHeaderMissing);
+        }
+
+        if self.frame_counter != debug_header.frame_counter() {
+            *self = Self::default();
+            return Err(SMSError::FrameCounterError);
+        }
+
+        if self.error.is_some() {
+            let mut error = None;
+            std::mem::swap(&mut self.error, &mut error);
+            *self = Self::default();
+            return Err(error.take().unwrap());
+        }
+
+        if self.cube_index < self.cube.len() {
+            return Err(SMSError::MissingCubeData(self.cube_index, self.cube.len()));
+        }
+
+        let src = ArrayView4::from_shape(self.shape().unwrap(), &self.cube[..]).unwrap();
+        let mut dst = Array4::<Complex<i16>>::zeros(self.shape().unwrap());
+        let middle = src.shape()[3] / 2;
+        let (src_right, src_left) = src.view().split_at(Axis(3), middle);
+        let (mut dst_right, mut dst_left) = dst.view_mut().split_at(Axis(3), middle);
+        dst_left.assign(&src_right);
+        dst_right.assign(&src_left);
+        dst.invert_axis(ndarray::Axis(1));
+
+        let cube = RadarCube {
+            timestamp: self.timestamp,
+            packets_captured: self.packets_captured.0,
+            packets_skipped: self.packets_skipped.0,
+            frame_counter: self.frame_counter,
+            bin_properties: transport.bin_properties().unwrap().to_header(),
+            missing_data: self.volume()? - self.cube_captured,
+            data: dst,
+        };
+
+        *self = Self::default();
+
+        Ok(Some(cube))
+    }
+
+    /// This function fires on each UDP packet we receive so we only instrument
+    /// at the trace level to avoid too much noise.  The critical portions for
+    /// the radar data cube are the start_of_frame and frame_footer functions
+    /// which are instrumented at the info level.
+    #[instrument(skip_all, level = "trace")]
+    fn frame_data(
+        &mut self,
+        transport: &TransportHeaderSlice,
+        debug_header: &DebugHeaderSlice,
+    ) -> Result<Option<RadarCube>, SMSError> {
+        // Ignore data messages if the cube header is not present.  An
+        // error will be returned when the frame footer is encountered.
+        if self.cube_header.is_none() {
+            return Ok(None);
+        }
+
+        // Ignore data messages if the frame counter does not match the
+        // current frame counter.  We also move the index to the end of
+        // the buffer to signal that we no longer want to read into the
+        // now corrupt cube.  An error will be returned once we reach
+        // the frame footer.
+        if self.frame_counter != debug_header.frame_counter() {
+            self.error = Some(SMSError::FrameCounterError);
+            self.cube_index = self.cube.len();
+
+            return Ok(None);
+        }
+
+        let message_counter = match transport.message_counter() {
+            Some(message_counter) => message_counter,
+            None => return Err(SMSError::MessageCounterMissing),
+        };
+
+        let expected_counter = self.message_counter + Wrapping(1);
+        self.message_counter = message_counter;
+        self.received_messages += Wrapping(1);
+
+        // Identify missing messages and adjust the cube index
+        // accordingly.  These messages should generally be
+        // dropped by the client as they contain corrupt cubes.
+        // The client is free to decide how to handle these by
+        // counting the number of missing elements, those with
+        // a value of 32767 (for both real and imaginary).
+        if expected_counter != message_counter {
+            // Calculate offset from the missing messages.
+            // This code assumes that all the payloads are of
+            // equal size when calculating the offset.
+            let offset = (message_counter - expected_counter).0 as usize;
+            let offset = offset * transport.debug_header()?.payload().len() / 4;
+            self.cube_index += offset;
+
+            // Avoid logging dropped messages once the cube has
+            // been filled.  We don't care about dropped packets
+            // in the dropped half of the radar cube frame.
+            if self.cube_index < self.cube.len() {
+                self.packets_skipped += message_counter - expected_counter;
             }
-            DebugHeader::FRAME_FOOTER => {
-                if self.cube_header.is_none() {
-                    *self = Self::default();
-                    return Err(SMSError::CubeHeaderMissing);
-                }
+        }
 
-                if self.frame_counter != debug_header.frame_counter {
-                    *self = Self::default();
-                    return Err(SMSError::FrameCounterError);
-                }
-
-                if self.error.is_some() {
-                    let mut error = None;
-                    std::mem::swap(&mut self.error, &mut error);
-                    *self = Self::default();
-                    return Err(error.take().unwrap());
-                }
-
-                if self.dropped != Wrapping(0) {
-                    let dropped = self.dropped.0;
-                    *self = Self::default();
-                    return Err(SMSError::DroppedMessages(dropped));
-                }
-
-                if self.cube_index < self.cube.len() {
-                    return Err(SMSError::MissingCubeData(self.cube_index, self.cube.len()));
-                } else {
-                    trace!(
-                        "captured radar cube with {} messages of expected {} [{}..{}] dropped {} messages",
-                        self.received_messages,
-                        self.message_counter - self.first_message + Wrapping(1),
-                        self.first_message,
-                        self.message_counter,
-                        self.dropped,
-                    );
-                }
-
-                let src = ArrayView4::from_shape(self.shape()?, &self.cube[..])?;
-                let mut dst = Array4::<Complex<i16>>::zeros(self.shape()?);
-                let middle = src.shape()[3] / 2;
-                let (src_right, src_left) = src.view().split_at(Axis(3), middle);
-                let (mut dst_right, mut dst_left) = dst.view_mut().split_at(Axis(3), middle);
-                dst_left.assign(&src_right);
-                dst_right.assign(&src_left);
-                dst.invert_axis(ndarray::Axis(1));
-
-                let cube = RadarCube {
-                    timestamp: self.timestamp,
-                    frame_counter: self.frame_counter,
-                    bin_properties: transport.bin_properties()?.to_header(),
-                    data: dst,
-                };
-
-                *self = Self::default();
-                return Ok(Some(cube));
-            }
-            DebugHeader::FRAME_DATA | DebugHeader::END_OF_DATA => {
-                // Ignore data messages if the cube header is not present.  An
-                // error will be returned when the frame footer is encountered.
-                if self.cube_header.is_none() {
-                    return Ok(None);
-                }
-
-                // Ignore data messages if the frame counter does not match the
-                // current frame counter.  We also move the index to the end of
-                // the buffer to signal that we no longer want to read into the
-                // now corrupt cube.  An error will be returned once we reach
-                // the frame footer.
-                if self.frame_counter != debug_header.frame_counter {
-                    debug!(
-                        "invalid frame counter: {}, expected: {}",
-                        debug_header.frame_counter, self.frame_counter,
-                    );
-
-                    self.error = Some(SMSError::FrameCounterError);
-                    self.cube_index = self.cube.len();
-
-                    return Ok(None);
-                }
-
-                match transport.message_counter() {
-                    Some(message_counter) => {
-                        let expected_counter = self.message_counter + Wrapping(1);
-                        self.message_counter = message_counter;
-                        self.received_messages += Wrapping(1);
-
-                        // Identify missing messages and adjust the cube index
-                        // accordingly.  These messages should generally be
-                        // dropped by the client as they contain corrupt cubes.
-                        // The client is free to decide how to handle these by
-                        // counting the number of missing elements, those with
-                        // a value of 32767,32767.
-                        if expected_counter != message_counter {
-                            // Calculate offset from the missing messages.
-                            // This code assumes that all the payloads are of
-                            // equal size when calculating the offset.
-                            let offset = (message_counter - expected_counter).0 as usize;
-                            let offset = offset * transport.payload().len();
-                            self.cube_index += offset;
-                            self.dropped += message_counter - expected_counter;
-                        }
-
-                        // This is a quick check to see if the cube is full. As
-                        // the DRVEGRD protocol will always transmit the maximum
-                        // possible cube size we want to ignore the random data
-                        // transmitted after the cube.
-                        if self.cube_index < self.cube.len() {
-                            let cube: Vec<u32> = transport
-                                .debug_header()?
-                                .payload()
-                                .chunks_exact(4)
-                                .map(|chunk| {
-                                    u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
-                                })
-                                .collect();
-                            let cube = unsafe {
-                                std::slice::from_raw_parts(
-                                    cube.as_ptr() as *const Complex<i16>,
-                                    cube.len(),
-                                )
-                            };
-                            let len = min(cube.len(), self.cube.len() - self.cube_index);
-                            self.cube[self.cube_index..(self.cube_index + len)]
-                                .copy_from_slice(&cube[..len]);
-                            self.cube_index += cube.len();
-                        }
-                    }
-                    None => return Err(SMSError::MessageCounterMissing),
-                }
-            }
-            flags => return Err(SMSError::InvalidDebugFlags(flags)),
+        // This is a quick check to see if the cube is full. As
+        // the DRVEGRD protocol will always transmit the maximum
+        // possible cube size we want to ignore the random data
+        // transmitted after the cube.
+        if self.cube_index < self.cube.len() {
+            self.packets_captured += 1;
+            let cube: Vec<u32> = transport
+                .debug_header()?
+                .payload()
+                .chunks_exact(4)
+                .map(|chunk| u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                .collect();
+            let cube = unsafe {
+                std::slice::from_raw_parts(cube.as_ptr() as *const Complex<i16>, cube.len())
+            };
+            let len = min(cube.len(), self.cube.len() - self.cube_index);
+            self.cube[self.cube_index..(self.cube_index + len)].copy_from_slice(&cube[..len]);
+            self.cube_index += cube.len();
+            self.cube_captured += len as usize;
         }
 
         Ok(None)
     }
 
-    pub fn frame_counter(&self) -> u32 {
-        self.frame_counter
+    pub fn read(&mut self, slice: &[u8]) -> Result<Option<RadarCube>, SMSError> {
+        let transport = TransportHeaderSlice::from_slice(slice)?;
+        let debug_header = transport.debug_header()?;
+
+        match debug_header.flags() {
+            DebugHeader::START_OF_FRAME => self.start_of_frame(&transport, &debug_header),
+            DebugHeader::FRAME_FOOTER => self.frame_footer(&transport, &debug_header),
+            DebugHeader::FRAME_DATA | DebugHeader::END_OF_DATA => {
+                self.frame_data(&transport, &debug_header)
+            }
+            flags => return Err(SMSError::InvalidDebugFlags(flags)),
+        }
     }
 
     /// Returns the shape of the radar cube or the error CubeHeaderMissing if

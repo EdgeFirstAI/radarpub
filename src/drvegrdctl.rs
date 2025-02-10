@@ -1,9 +1,7 @@
 mod can;
 
+use can::{read_parameter, read_status, send_command, write_parameter, Command, Parameter, Status};
 use clap::Parser;
-use can::{
-    read_parameter, read_status, send_command, write_parameter, Command, Parameter, Status,
-};
 use log::debug;
 
 #[derive(Parser, Debug, Clone)]
@@ -34,14 +32,14 @@ struct Args {
     value: Option<u32>,
 }
 
-#[async_std::main]
+#[tokio::main]
 async fn main() {
     env_logger::init();
     let args = Args::parse();
 
     let device = args.device.unwrap_or("can0".to_string());
     debug!("opening can interface {}", device);
-    let sock = socketcan::async_io::CanSocket::open(&device).unwrap();
+    let sock = socketcan::tokio::CanSocket::open(&device).unwrap();
 
     if args.status {
         let software_generation = read_status(&sock, Status::SoftwareGeneration)

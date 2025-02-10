@@ -1,11 +1,10 @@
 mod can;
 mod eth;
+mod net;
 
-use async_std::{net::UdpSocket, task::block_on};
 use clap::Parser;
 use eth::{RadarCube, RadarCubeReader, SMSError, TransportHeaderSlice, SMS_PACKET_SIZE};
-use kanal::{bounded_async as channel, AsyncSender as Sender};
-use log::{debug, error, trace, warn};
+use log::{debug, error, trace};
 use ndarray::{s, Array2};
 use ndarray_npy::write_npy;
 use num::complex::Complex32;
@@ -14,7 +13,6 @@ use std::{
     fs::File,
     net::{Ipv4Addr, SocketAddr},
     thread,
-    time::Instant,
 };
 
 mod common;
@@ -83,13 +81,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let rr2 = rr.clone();
 
             if args.cube {
-                let cube_thread = thread::Builder::new()
-                    .name("radarcube".to_string())
-                    .spawn(move || block_on(udp_loop(&rr, &args.numpy)).unwrap())?;
-                block_on(can_loop(&rr2, Some(device)));
+                let cube_thread =
+                    thread::Builder::new()
+                        .name("cube".to_string())
+                        .spawn(move || {
+                            tokio::runtime::Builder::new_current_thread()
+                                .enable_all()
+                                .build()
+                                .unwrap()
+                                .block_on(udp_loop(&rr, &args.numpy))
+                                .unwrap();
+                        })?;
                 cube_thread.join().unwrap();
             } else {
-                block_on(can_loop(&rr2, Some(device)));
+                let can_thread =
+                    thread::Builder::new()
+                        .name("can".to_string())
+                        .spawn(move || {
+                            tokio::runtime::Builder::new_current_thread()
+                                .enable_all()
+                                .build()
+                                .unwrap()
+                                .block_on(can_loop(&rr2, Some(device)));
+                        })?;
+                can_thread.join().unwrap();
             }
 
             return Ok(());
@@ -97,8 +112,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if args.cube {
             let cube_thread = thread::Builder::new()
-                .name("radarcube".to_string())
-                .spawn(move || block_on(udp_loop(&rr, &args.numpy)).unwrap())?;
+                .name("cube".to_string())
+                .spawn(move || {
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .unwrap()
+                        .block_on(udp_loop(&rr, &args.numpy))
+                        .unwrap();
+                })?;
             cube_thread.join().unwrap();
         } else {
             println!("Neither cube nor can interface selected, exiting...");
@@ -141,115 +163,6 @@ fn format_cube(
     Ok(data)
 }
 
-/// The port5 implementation on Linux uses the recvmmsg system call to enable
-/// bulk reads of UDP packets.  This is not available on other platforms.
-#[cfg(target_os = "linux")]
-async fn port5(tx: Sender<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
-    use std::{os::fd::AsRawFd, time::Duration};
-    use eth::SMS_PACKET_SIZE;
-
-    const VLEN: usize = 32;
-    const RETRY_TIME: Duration = Duration::from_micros(100);
-
-    let mut mmsgs = vec![
-        libc::mmsghdr {
-            msg_hdr: libc::msghdr {
-                msg_name: std::ptr::null_mut(),
-                msg_namelen: 0,
-                msg_iov: std::ptr::null_mut(),
-                msg_iovlen: 0,
-                msg_control: std::ptr::null_mut(),
-                msg_controllen: 0,
-                msg_flags: 0,
-            },
-            msg_len: 0,
-        };
-        VLEN
-    ];
-    let mut iovecs = vec![
-        libc::iovec {
-            iov_base: std::ptr::null_mut(),
-            iov_len: 0,
-        };
-        VLEN
-    ];
-    let mut buf = vec![0; SMS_PACKET_SIZE * VLEN];
-
-    common::set_process_priority();
-
-    let sock = UdpSocket::bind("0.0.0.0:50005").await.unwrap();
-    let sock = common::set_socket_bufsize(sock, 2 * 1024 * 1024);
-
-    loop {
-        for i in 0..VLEN {
-            iovecs[i].iov_base = buf[i * SMS_PACKET_SIZE..].as_mut_ptr() as *mut libc::c_void;
-            iovecs[i].iov_len = SMS_PACKET_SIZE;
-            mmsgs[i].msg_hdr.msg_iov = &mut iovecs[i];
-            mmsgs[i].msg_hdr.msg_iovlen = 1;
-            mmsgs[i].msg_hdr.msg_name = std::ptr::null_mut();
-            mmsgs[i].msg_hdr.msg_namelen = 0;
-            mmsgs[i].msg_hdr.msg_control = std::ptr::null_mut();
-            mmsgs[i].msg_hdr.msg_controllen = 0;
-            mmsgs[i].msg_hdr.msg_flags = 0;
-            mmsgs[i].msg_len = 0;
-        }
-
-        match unsafe {
-            libc::recvmmsg(
-                sock.as_raw_fd(),
-                mmsgs.as_mut_ptr(),
-                VLEN as u32,
-                0,
-                std::ptr::null_mut(),
-            )
-        } {
-            -1 => {
-                let err = std::io::Error::last_os_error();
-                match err.kind() {
-                    std::io::ErrorKind::Interrupted => (),
-                    std::io::ErrorKind::WouldBlock => thread::sleep(RETRY_TIME),
-                    _ => error!("port5 read error: {:?}", err),
-                }
-            }
-            n => match tx.send(buf[..n as usize * SMS_PACKET_SIZE].to_vec()).await {
-                Ok(_) => (),
-                Err(e) => error!("port5 send error: {:?}", e),
-            },
-        }
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-async fn port5(tx: Sender<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
-    let sock = UdpSocket::bind("0.0.0.0:50005").await.unwrap();
-    let mut buf = [0; SMS_PACKET_SIZE];
-
-    loop {
-        match sock.recv_from(&mut buf).await {
-            Ok((n, _)) => match tx.send(buf.to_vec()).await {
-                Ok(_) => (),
-                Err(e) => error!("port5 error: {:?}", e),
-            },
-            Err(e) => error!("port5 error: {:?}", e),
-        }
-    }
-}
-
-async fn port63(tx: Sender<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
-    let sock = UdpSocket::bind("0.0.0.0:50063").await.unwrap();
-    let mut buf = [0; SMS_PACKET_SIZE];
-
-    loop {
-        match sock.recv_from(&mut buf).await {
-            Ok((_, _)) => match tx.send(buf.to_vec()).await {
-                Ok(_) => (),
-                Err(e) => error!("port63 error: {:?}", e),
-            },
-            Err(e) => error!("port63 error: {:?}", e),
-        }
-    }
-}
-
 async fn udp_loop(
     rr: &Option<RecordingStream>,
     numpy: &Option<String>,
@@ -258,23 +171,30 @@ async fn udp_loop(
         std::fs::create_dir_all(numpy)?;
     }
 
-    let (tx5, rx) = channel(10000);
+    let (tx5, rx) = kanal::bounded_async(128);
     let tx63 = tx5.clone();
 
     thread::Builder::new()
-        .name("port5".to_owned())
-        .spawn(move || block_on(port5(tx5)).unwrap())?;
+        .name("port5".to_string())
+        .spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(net::port5(tx5));
+        })?;
 
     thread::Builder::new()
-        .name("port63".to_owned())
-        .spawn(move || block_on(port63(tx63)).unwrap())?;
+        .name("port63".to_string())
+        .spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(net::port63(tx63));
+        })?;
 
     let mut reader = RadarCubeReader::default();
-
-    let mut cube_times = [0; 180];
-    let mut cube_index = 0;
-    let mut dropped = 0;
-    let mut prev_time = Instant::now();
 
     loop {
         let msg = match rx.recv().await {
@@ -293,10 +213,15 @@ async fn udp_loop(
 
             match reader.read(&msg[start..end]) {
                 Ok(Some(cubemsg)) => {
-                    cube_times[cube_index] = prev_time.elapsed().as_millis() as i32;
-                    cube_index += 1;
+                    let badcount = cubemsg
+                        .data
+                        .iter()
+                        .filter(|x| x.re == 32767 || x.im == 32767)
+                        .count();
+                    let badrate = badcount as f64 / cubemsg.data.len() as f64;
+                    let skiprate = cubemsg.packets_skipped as f64
+                        / (cubemsg.packets_skipped + cubemsg.packets_captured) as f64;
 
-                    let badcount = cubemsg.data.iter().filter(|x| x.re == 32767).count();
                     if badcount != 0 {
                         error!(
                             "encountered {} invalid elements in the radar cube",
@@ -304,46 +229,9 @@ async fn udp_loop(
                         );
                     }
 
-                    if cube_index == cube_times.len() {
-                        cube_index = 0;
-                        let avg = cube_times.iter().sum::<i32>() / cube_times.len() as i32;
-                        let min = cube_times.iter().min().unwrap();
-                        let max = cube_times.iter().max().unwrap();
-                        let fps = 1000.0 / (avg as f32);
-                        let droprate = (dropped as f32) / cube_times.len() as f32;
-                        dropped = 0;
-
-                        if droprate > 0.05 {
-                            error!(
-                                "cube fps={} avg={} min={} max={} droprate={:.2}%",
-                                fps,
-                                avg,
-                                min,
-                                max,
-                                droprate * 100.0,
-                            );
-                        } else if droprate > 0.025 {
-                            warn!(
-                                "cube fps={} avg={} min={} max={} droprate={:.2}%",
-                                fps,
-                                avg,
-                                min,
-                                max,
-                                droprate * 100.0,
-                            );
-                        } else {
-                            debug!(
-                                "cube fps={} avg={} min={} max={} droprate={:.2}%",
-                                fps,
-                                avg,
-                                min,
-                                max,
-                                droprate * 100.0,
-                            );
-                        }
+                    if cubemsg.packets_skipped != 0 {
+                        error!("dropped {} packets", cubemsg.packets_skipped);
                     }
-
-                    prev_time = Instant::now();
 
                     let cube = format_cube(&cubemsg, numpy)?;
 
@@ -363,13 +251,25 @@ async fn udp_loop(
                             "cube/bin_per_speed",
                             &rerun::Scalar::new(cubemsg.bin_properties.bin_per_speed as f64),
                         )?;
+
+                        rr.log("skiprate", &rerun::Scalar::new(skiprate))?;
+                        rr.log("badrate", &rerun::Scalar::new(badrate))?;
+
+                        rr.log(
+                            "cubemsg",
+                            &rerun::TextLog::new(format!(
+                                "timestamp: {} captured: {} skipped: {} missing: {} badcount: {}",
+                                cubemsg.timestamp,
+                                cubemsg.packets_captured,
+                                cubemsg.packets_skipped,
+                                cubemsg.missing_data,
+                                badcount
+                            )),
+                        )?;
                     }
                 }
                 Ok(None) => (),
-                Err(err) => {
-                    dropped += 1;
-                    error!("Cube Error: {:?}", err);
-                }
+                Err(err) => error!("Cube Error: {:?}", err),
             }
         }
     }
@@ -427,9 +327,9 @@ fn pcap_loop(
 
 #[cfg(feature = "can")]
 async fn can_loop(rr: &Option<RecordingStream>, device: Option<String>) {
-    use async_std::task::yield_now;
     use can;
     use rerun::Points3D;
+    use tokio::task::yield_now;
 
     let iface = match device {
         Some(device) => device,
@@ -439,7 +339,7 @@ async fn can_loop(rr: &Option<RecordingStream>, device: Option<String>) {
     };
 
     debug!("opening can interface {}", iface);
-    let sock = socketcan::async_io::CanSocket::open(&iface).unwrap();
+    let sock = socketcan::tokio::CanSocket::open(&iface).unwrap();
 
     loop {
         match can::read_message(&sock).await {

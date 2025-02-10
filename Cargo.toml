@@ -33,13 +33,19 @@ path = "src/rerun.rs"
 required-features = ["rerun"]
 
 [features]
-default = ["can", "zenoh"]
+default = ["tracy", "can", "zenoh"]
 can = ["dep:socketcan"]
 rerun = ["dep:rerun", "dep:etherparse", "dep:pcarp", "dep:ndarray-npy"]
 zenoh = ["dep:zenoh"]
+tracy = ["tracing-tracy/enable", "tracy-client/enable"]
+profiling = [
+    "tracing-tracy/sampling",
+    "tracing-tracy/system-tracing",
+    "tracy-client/sampling",
+    "tracy-client/system-tracing",
+]
 
 [dependencies]
-async-std = { version = "1.12.0", features = ["attributes"] }
 cdr = "0.2.4"
 clap = { version = "4.5.28", features = ["derive", "env"] }
 crc16 = "0.4.0"
@@ -57,6 +63,29 @@ ndarray-npy = { version = "0.9.1", optional = true }
 num = "0.4.1"
 pcarp = { version = "2.0.0", optional = true }
 rerun = { version = "0.22.0", optional = true }
-socketcan = { version = "3.5.0", features = ["async-std"], optional = true }
+serde_json = "1.0.138"
+socketcan = { version = "3.5.0", features = ["tokio"], optional = true }
+tokio = { version = "1.43.0", features = [
+    "rt-multi-thread",
+    "time",
+    "io-std",
+    "tracing",
+] }
+tracing = "0.1.41"
+tracing-journald = "0.3.1"
+tracing-log = "0.2.0"
+tracing-subscriber = "0.3.19"
+tracing-tracy = { version = "0.11.4", default-features = false, features = [
+    "manual-lifetime",
+    "broadcast",
+    "ondemand",
+    "fibers",
+] }
+tracy-client = { version = "0.18.0", default-features = false, features = [
+    "manual-lifetime",
+    "broadcast",
+    "ondemand",
+    "fibers",
+] }
 uuid = { version = "1.11.0", features = ["v4"] }
-zenoh = { version = "0.10.0-rc", optional = true }
+zenoh = { version = "1.2.1", optional = true }
