@@ -36,6 +36,11 @@ use zenoh::{
     Session,
 };
 
+#[cfg(feature = "profiling")]
+#[global_allocator]
+static GLOBAL: tracy_client::ProfiledAllocator<std::alloc::System> =
+    tracy_client::ProfiledAllocator::new(std::alloc::System, 100);
+
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum PointFieldType {
