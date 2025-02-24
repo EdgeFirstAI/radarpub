@@ -893,13 +893,7 @@ fn read_data_1(data: u64, tgt: Option<Target>) -> Target {
     }
 }
 
-#[cfg(target_endian = "big")]
-pub fn load_data(data: &[u8]) -> u64 {
-    u64::from_be_bytes(data[0..8].try_into().unwrap())
-}
-
-#[cfg(target_endian = "little")]
-pub fn load_data(data: &[u8]) -> u64 {
+fn load_data(data: &[u8]) -> u64 {
     u64::from_le_bytes(data[0..8].try_into().unwrap())
 }
 

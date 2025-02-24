@@ -1011,7 +1011,7 @@ impl RadarCubeReader {
             DebugHeader::FRAME_DATA | DebugHeader::END_OF_DATA => {
                 self.frame_data(&transport, &debug_header)
             }
-            flags => return Err(SMSError::InvalidDebugFlags(flags)),
+            flags => Err(SMSError::InvalidDebugFlags(flags)),
         }
     }
 
