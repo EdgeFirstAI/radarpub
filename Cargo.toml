@@ -17,28 +17,79 @@ inherits = "release"
 strip = false
 debug = true
 
+[[bin]]
+name = "radarpub"
+path = "src/radarpub.rs"
+required-features = ["can", "zenoh"]
+
+[[bin]]
+name = "drvegrdctl"
+path = "src/drvegrdctl.rs"
+required-features = ["can"]
+
+[[bin]]
+name = "drvegrd-rerun"
+path = "src/rerun.rs"
+required-features = ["rerun"]
+
 [features]
-default = []
+default = ["tracy", "can", "zenoh"]
+can = ["dep:socketcan"]
+rerun = ["dep:rerun", "dep:etherparse", "dep:pcarp", "dep:ndarray-npy"]
+zenoh = ["dep:zenoh"]
+tracy = ["tracing-tracy/enable", "tracy-client/enable"]
+profiling = [
+    "tracing-tracy/sampling",
+    "tracing-tracy/system-tracing",
+    "tracy-client/sampling",
+    "tracy-client/system-tracing",
+]
 
 [dependencies]
-drvegrd = { git = "ssh://git@bitbucket.org/au-zone/drvegrd-rs.git", tag = "1.4.1", features = [ "can" ] }
-edgefirst-schemas = "1.2.4"
-async-std = { version = "1.12.0", features = ["attributes"] }
 cdr = "0.2.4"
-clap = { version = "4.5.28", features = ["derive", "env"] }
-log = "0.4.22"
-env_logger = "0.11.6"
-serde = "1.0.215"
-serde_derive = "1.0.215"
-socketcan = { version = "3.3.1", features = ["async-std"] }
-unix-ts = "1.0"
-zenoh = "0.10.0-rc"
-futures = "0.3.31"
-ndarray = "0.16.1"
-kanal = { git = "https://github.com/fereidani/kanal", rev = "b6aeab2" }
-libc = "0.2.167"
+clap = { version = "4.5.31", features = ["derive", "env"] }
+crc16 = "0.4.0"
 dbscan = "0.3.1"
+edgefirst-schemas = "1.2.4"
+env_logger = "0.11.6"
+etherparse = { version = "0.17.0", optional = true }
+kanal = { git = "https://github.com/fereidani/kanal", rev = "b6aeab2" }
 lapjv = "0.2.1"
-uuid = { version = "1.11.0", features = ["v4"] }
+libc = "0.2.170"
+log = "0.4.26"
 nalgebra = "0.33.2"
+ndarray = "0.16.1"
+ndarray-npy = { version = "0.9.1", optional = true }
+num = "0.4.1"
+pcarp = { version = "2.0.0", optional = true }
+rerun = { version = "0.22.1", optional = true }
+serde_json = "1.0.139"
+socketcan = { version = "3.5.0", features = ["tokio"], optional = true }
+tokio = { version = "1.43.0", features = [
+    "rt-multi-thread",
+    "time",
+    "io-std",
+    "tracing",
+] }
+tracing = "0.1.41"
+tracing-journald = "0.3.1"
+tracing-log = "0.2.0"
+tracing-subscriber = "0.3.19"
+tracing-tracy = { version = "0.11.4", default-features = false, features = [
+    "manual-lifetime",
+    "broadcast",
+    "ondemand",
+    "fibers",
+] }
+tracy-client = { version = "0.18.0", default-features = false, features = [
+    "manual-lifetime",
+    "broadcast",
+    "ondemand",
+    "fibers",
+] }
+uuid = { version = "1.14.0", features = ["v4"] }
+zenoh = { version = "1.2.1", optional = true }
 
+[dev-dependencies]
+etherparse = { version = "0.17.0" }
+pcarp = { version = "2.0.0" }

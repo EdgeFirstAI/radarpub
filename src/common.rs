@@ -1,5 +1,5 @@
-use async_std::net::UdpSocket;
-use log::warn;
+use std::net::UdpSocket;
+use tracing::warn;
 
 #[cfg(target_os = "linux")]
 pub fn set_process_priority() {
@@ -38,10 +38,11 @@ pub fn set_socket_bufsize(socket: UdpSocket, size: usize) -> UdpSocket {
             std::io::Error::last_os_error()
         );
     }
+
     unsafe { UdpSocket::from_raw_fd(fd) }
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn set_socket_bufsize(socket: UdpSocket, size: usize) -> UdpSocket {
+pub fn set_socket_bufsize(socket: UdpSocket, _size: usize) -> UdpSocket {
     socket
 }
