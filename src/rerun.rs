@@ -8,12 +8,8 @@ use log::{debug, error, trace};
 use ndarray::{s, Array2};
 use ndarray_npy::write_npy;
 use num::complex::Complex32;
-use rerun::{external::re_sdk_comms::DEFAULT_SERVER_PORT, RecordingStream};
-use std::{
-    fs::File,
-    net::{Ipv4Addr, SocketAddr},
-    thread,
-};
+use rerun::RecordingStream;
+use std::{fs::File, net::Ipv4Addr, thread};
 
 mod common;
 
@@ -59,11 +55,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     let rr = if let Some(addr) = args.connect {
-        let port = args.port.unwrap_or(DEFAULT_SERVER_PORT);
-        let remote = SocketAddr::new(addr.into(), port);
+        let port = args.port.unwrap_or(9876);
         Some(
-            rerun::RecordingStreamBuilder::new("radarview")
-                .connect_opts(remote, rerun::default_flush_timeout())?,
+            rerun::RecordingStreamBuilder::new("radarview").connect_grpc_opts(
+                format!("rerun+http://{}:{}/proxy", addr, port),
+                rerun::default_flush_timeout(),
+            )?,
         )
     } else if let Some(record) = args.record {
         Some(rerun::RecordingStreamBuilder::new("radarview").save(record)?)
@@ -289,7 +286,7 @@ fn pcap_loop(
     let mut frame_num = 0;
 
     if let Some(rr) = rr {
-        rr.set_time_seconds("stable_time", 0f64)
+        rr.set_time_secs("stable_time", 0f64)
     }
 
     for cap in pcarp::Capture::new(file) {
@@ -305,7 +302,7 @@ fn pcap_loop(
                                 let cube = format_cube(&cubemsg, numpy)?;
 
                                 if let Some(rr) = rr {
-                                    rr.set_time_seconds("stable_time", time as f64);
+                                    rr.set_time_secs("stable_time", time as f64);
                                     let tensor = rerun::Tensor::try_from(cube)?;
                                     rr.log("cube", &tensor)?;
                                 }
