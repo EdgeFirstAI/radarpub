@@ -96,7 +96,7 @@ tracy-client = { version = "0.18.3", default-features = false, features = [
     "fibers",
 ] }
 uuid = { version = "1.18.1", features = ["v4"] }
-zenoh = { version = "1.3.4", optional = true }
+zenoh = { version = "1.6.2", optional = true }
 
 [dev-dependencies]
 etherparse = { version = "0.18.0" }
