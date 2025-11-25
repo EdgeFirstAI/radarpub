@@ -1,0 +1,39 @@
+# GitHub Actions workflow for Developer Certificate of Origin (DCO) enforcement
+#
+# Ensures all commits are signed off per Apache-2.0 licensing requirements
+
+name: DCO Check
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  dco-check:
+    name: Check DCO Sign-off
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Check DCO
+        uses: tim-actions/dco@v1.1
+        with:
+          # Require all commits to have DCO sign-off
+          require-signoff: true
+          
+      - name: DCO Check Failed
+        if: failure()
+        run: |
+          echo "❌ DCO sign-off missing!"
+          echo ""
+          echo "All commits must include a Developer Certificate of Origin (DCO) sign-off."
+          echo ""
+          echo "To add DCO sign-off to your commits, use:"
+          echo "  git commit -s -m \"Your commit message\""
+          echo ""
+          echo "To add sign-off to previous commits:"
+          echo "  git rebase --signoff HEAD~N  # where N is the number of commits"
+          echo "  git push --force-with-lease"
+          echo ""
+          echo "The sign-off certifies that you have the right to submit the work"
+          echo "under the Apache-2.0 license. See CONTRIBUTING.md for details."
+          exit 1

@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2025 Au-Zone Technologies. All Rights Reserved.
 
-mod can;
-mod eth;
-mod net;
+//! Direct Radar Viewer Example
+//!
+//! This example demonstrates how to connect directly to a Smart Micro DRVEGRD
+//! radar sensor and visualize the data using Rerun. It supports:
+//! - Live CAN interface reading for target data
+//! - Live UDP interface reading for radar cube data
+//! - PCAP file replay for offline analysis
+//! - Numpy export for post-processing
 
 use clap::Parser;
-use eth::{RadarCube, RadarCubeReader, SMSError, TransportHeaderSlice, SMS_PACKET_SIZE};
 use log::{debug, error, trace};
 use ndarray::{s, Array2};
 use ndarray_npy::write_npy;
@@ -14,40 +18,51 @@ use num::complex::Complex32;
 use rerun::RecordingStream;
 use std::{fs::File, net::Ipv4Addr, thread};
 
-mod common;
+// Import from radarpub library
+use radarpub::{
+    eth::{RadarCube, RadarCubeReader, SMSError, TransportHeaderSlice, SMS_PACKET_SIZE},
+    net,
+};
+
+#[cfg(feature = "can")]
+use radarpub::can;
 
 #[derive(Parser, Debug, Clone)]
-#[command(author, version, about, long_about = None)]
+#[command(
+    author,
+    version,
+    about = "Direct radar sensor viewer with Rerun visualization"
+)]
 struct Args {
-    /// connect to remote rerun viewer at this address
+    /// Connect to remote Rerun viewer at this address
     #[arg(short, long)]
     connect: Option<Ipv4Addr>,
 
-    /// record rerun data to file instead of live viewer
+    /// Record Rerun data to file instead of live viewer
     #[arg(short, long)]
     record: Option<String>,
 
-    /// launch local rerun viewer
+    /// Launch local Rerun viewer
     #[arg(short, long)]
     viewer: bool,
 
-    /// use this port for the rerun viewer (remote or web server)
+    /// Port for the Rerun viewer (remote or web server)
     #[arg(short, long)]
     port: Option<u16>,
 
-    /// Save Numpy files to this directory, one per frame.
+    /// Save Numpy files to this directory, one per frame
     #[arg(short, long)]
     numpy: Option<String>,
 
-    /// Read from a pcapng file instead of a live interface.
+    /// Read from a PCAP file instead of a live interface
     #[arg()]
     pcap: Option<String>,
 
-    /// Enable radar data cube streaming.
+    /// Enable radar data cube streaming (UDP)
     #[arg(long)]
     cube: bool,
 
-    /// Open can interface for target data.
+    /// CAN interface for target data (e.g., can0, vcan0)
     #[cfg(feature = "can")]
     #[arg(long)]
     device: Option<String>,
@@ -57,30 +72,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let args = Args::parse();
 
+    // Initialize Rerun recording stream
     let rr = if let Some(addr) = args.connect {
         let port = args.port.unwrap_or(9876);
         Some(
-            rerun::RecordingStreamBuilder::new("radarview").connect_grpc_opts(
-                format!("rerun+http://{}:{}/proxy", addr, port),
-                rerun::default_flush_timeout(),
-            )?,
+            rerun::RecordingStreamBuilder::new("radar_viewer")
+                .connect_grpc_opts(format!("rerun+http://{}:{}/proxy", addr, port))?,
         )
     } else if let Some(record) = args.record {
-        Some(rerun::RecordingStreamBuilder::new("radarview").save(record)?)
+        Some(rerun::RecordingStreamBuilder::new("radar_viewer").save(record)?)
     } else if args.viewer {
-        Some(rerun::RecordingStreamBuilder::new("radarview").spawn()?)
+        Some(rerun::RecordingStreamBuilder::new("radar_viewer").spawn()?)
     } else {
         None
     };
 
+    // Handle different data sources
     if let Some(pcap) = args.pcap {
+        // Offline PCAP replay
         pcap_loop(&rr, &pcap, &args.numpy)?;
     } else {
+        // Live radar data
         #[cfg(feature = "can")]
         if let Some(device) = args.device {
             let rr2 = rr.clone();
 
             if args.cube {
+                // Cube data only
                 let cube_thread =
                     thread::Builder::new()
                         .name("cube".to_string())
@@ -94,6 +112,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         })?;
                 cube_thread.join().unwrap();
             } else {
+                // CAN target data only
                 let can_thread =
                     thread::Builder::new()
                         .name("can".to_string())
@@ -111,6 +130,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if args.cube {
+            // Cube data without CAN
             let cube_thread = thread::Builder::new()
                 .name("cube".to_string())
                 .spawn(move || {
@@ -123,19 +143,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })?;
             cube_thread.join().unwrap();
         } else {
-            println!("Neither cube nor can interface selected, exiting...");
+            println!("Neither cube nor CAN interface selected, exiting...");
+            println!("Use --cube for radar cube data or --device <can_interface> for target data");
         }
     }
 
     Ok(())
 }
 
+/// Format radar cube for visualization
+///
+/// Extracts a 2D slice from the 4D radar cube for display and optionally saves
+/// to Numpy format
 fn format_cube(
     cube: &RadarCube,
     numpy: &Option<String>,
 ) -> Result<Array2<i16>, Box<dyn std::error::Error>> {
     if let Some(numpy) = numpy {
-        // Numpy requires complex arrays to be either f32 or f64.
+        // Numpy requires complex arrays to be either f32 or f64
         let npdata = cube.data.mapv(|x| Complex32::new(x.re as f32, x.im as f32));
         write_npy(
             format!("{}/cube_{}.npy", numpy, cube.frame_counter),
@@ -144,14 +169,11 @@ fn format_cube(
     }
 
     // The radar cube shape is (sequence, range, rx antenna, doppler, complex).
-    // When saving the cube this shape should be maintained (possibly shuffled)
-    // but for display purposes we take the first sequence, first rx antenna,
-    // and the real portion of the signal (note drvegrd does imaginary first).
+    // For display purposes, take the first sequence, first rx antenna, and the real
+    // portion
     let data = cube.data.slice(s![1, .., 0, ..]);
 
-    // Convert the cube to real absolute values for display as rerun cannot
-    // handle complex numbers.  The absolute value is to ensure a constant
-    // background.
+    // Convert to absolute values (Rerun cannot handle complex numbers)
     let data = data.mapv(|x| x.re.abs());
 
     trace!(
@@ -163,6 +185,7 @@ fn format_cube(
     Ok(data)
 }
 
+/// Main loop for live UDP radar cube data
 async fn udp_loop(
     rr: &Option<RecordingStream>,
     numpy: &Option<String>,
@@ -174,6 +197,7 @@ async fn udp_loop(
     let (tx5, rx) = kanal::bounded_async(128);
     let tx63 = tx5.clone();
 
+    // Spawn UDP receiver threads for ports 5 and 63
     thread::Builder::new()
         .name("port5".to_string())
         .spawn(move || {
@@ -241,19 +265,25 @@ async fn udp_loop(
 
                         rr.log(
                             "cube/speed_per_bin",
-                            &rerun::Scalar::new(cubemsg.bin_properties.speed_per_bin as f64),
+                            &rerun::archetypes::Scalars::new([
+                                cubemsg.bin_properties.speed_per_bin as f64,
+                            ]),
                         )?;
                         rr.log(
                             "cube/range_per_bin",
-                            &rerun::Scalar::new(cubemsg.bin_properties.range_per_bin as f64),
+                            &rerun::archetypes::Scalars::new([
+                                cubemsg.bin_properties.range_per_bin as f64,
+                            ]),
                         )?;
                         rr.log(
                             "cube/bin_per_speed",
-                            &rerun::Scalar::new(cubemsg.bin_properties.bin_per_speed as f64),
+                            &rerun::archetypes::Scalars::new([
+                                cubemsg.bin_properties.bin_per_speed as f64,
+                            ]),
                         )?;
 
-                        rr.log("skiprate", &rerun::Scalar::new(skiprate))?;
-                        rr.log("badrate", &rerun::Scalar::new(badrate))?;
+                        rr.log("skiprate", &rerun::archetypes::Scalars::new([skiprate]))?;
+                        rr.log("badrate", &rerun::archetypes::Scalars::new([badrate]))?;
 
                         rr.log(
                             "cubemsg",
@@ -275,6 +305,7 @@ async fn udp_loop(
     }
 }
 
+/// PCAP file replay loop
 fn pcap_loop(
     rr: &Option<RecordingStream>,
     path: &String,
@@ -286,11 +317,6 @@ fn pcap_loop(
 
     let file = File::open(path)?;
     let mut reader = RadarCubeReader::default();
-    let mut frame_num = 0;
-
-    if let Some(rr) = rr {
-        rr.set_time_secs("stable_time", 0f64)
-    }
 
     for cap in pcarp::Capture::new(file) {
         match etherparse::SlicedPacket::from_ethernet(&cap.unwrap().data) {
@@ -300,19 +326,16 @@ fn pcap_loop(
                     if TransportHeaderSlice::from_slice(udp.payload()).is_ok() {
                         match reader.read(udp.payload()) {
                             Ok(Some(cubemsg)) => {
-                                frame_num += 1;
-                                let time = frame_num as f32 * 0.055;
                                 let cube = format_cube(&cubemsg, numpy)?;
 
                                 if let Some(rr) = rr {
-                                    rr.set_time_secs("stable_time", time as f64);
                                     let tensor = rerun::Tensor::try_from(cube)?;
                                     rr.log("cube", &tensor)?;
                                 }
                             }
                             Ok(None) => (),
                             // Ignore StartPattern errors when reading from pcap which includes
-                            // non-SMS data.
+                            // non-SMS data
                             Err(SMSError::StartPattern(_)) => (),
                             Err(err) => error!("Cube Error: {:?}", err),
                         }
@@ -325,9 +348,9 @@ fn pcap_loop(
     Ok(())
 }
 
+/// Live CAN target data loop
 #[cfg(feature = "can")]
 async fn can_loop(rr: &Option<RecordingStream>, device: Option<String>) {
-    use can;
     use rerun::Points3D;
     use tokio::task::yield_now;
 
@@ -338,18 +361,18 @@ async fn can_loop(rr: &Option<RecordingStream>, device: Option<String>) {
         },
     };
 
-    debug!("opening can interface {}", iface);
+    debug!("opening CAN interface {}", iface);
     let sock = socketcan::tokio::CanSocket::open(&iface).unwrap();
 
     loop {
         match can::read_message(&sock).await {
             Err(err) => println!("Error: {:?}", err),
             Ok(msg) => {
-                trace!("radar can header {:?}", msg.header);
+                trace!("radar CAN header {:?}", msg.header);
 
                 if let Some(rr) = rr {
                     rr.log(
-                        "radar",
+                        "radar/targets",
                         &Points3D::new((0..msg.header.n_targets).map(|idx| {
                             let tgt = &msg.targets[idx];
                             transform_xyz(
@@ -372,6 +395,7 @@ async fn can_loop(rr: &Option<RecordingStream>, device: Option<String>) {
     }
 }
 
+/// Convert spherical coordinates to Cartesian XYZ
 #[cfg(feature = "can")]
 fn transform_xyz(range: f32, azimuth: f32, elevation: f32, mirror: bool) -> [f32; 3] {
     use core::f32::consts::PI;
@@ -388,6 +412,7 @@ fn transform_xyz(range: f32, azimuth: f32, elevation: f32, mirror: bool) -> [f32
     }
 }
 
+/// Viridis colormap for power visualization
 #[cfg(feature = "can")]
 fn colormap_viridis_srgb(t: f32) -> [u8; 4] {
     use rerun::external::glam::Vec3A;

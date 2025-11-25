@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2025 Au-Zone Technologies. All Rights Reserved.
+
 use crate::eth::SMS_PACKET_SIZE;
 use kanal::AsyncSender;
 use tokio::net::UdpSocket;
@@ -98,6 +101,13 @@ pub async fn port5(tx: AsyncSender<Vec<u8>>) {
     }
 }
 
+/// UDP receiver for radar cube data on port 50063.
+///
+/// Receives Smart Micro SMS protocol packets and forwards to processing
+/// channel.
+///
+/// # Arguments
+/// * `tx` - Async channel sender for received packets
 pub async fn port63(tx: AsyncSender<Vec<u8>>) {
     let sock = UdpSocket::bind("0.0.0.0:50063").await.unwrap();
     let mut buf = [0; SMS_PACKET_SIZE];

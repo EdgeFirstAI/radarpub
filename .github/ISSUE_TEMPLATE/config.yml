@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: GitHub Discussions
+    url: https://github.com/au-zone/radarpub/discussions
+    about: Ask questions and discuss ideas with the community
+  - name: EdgeFirst Documentation
+    url: https://doc.edgefirst.ai/
+    about: Official EdgeFirst documentation and guides
+  - name: Security Vulnerability
+    url: mailto:support@au-zone.com
+    about: Report security vulnerabilities privately (DO NOT use public issues)

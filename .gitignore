@@ -6,3 +6,21 @@ perf.data*
 
 *.rtm
 *.tflite
+
+# Local notes
+STATUS.md
+TODO.md
+
+# SBOM generation artifacts
+venv/
+sbom.json
+source-sbom*.json
+deps-sbom.json
+*.cdx.json
+
+# Documentation build
+target/doc/
+
+# External Git repositories
+/SPS/
+/samples/

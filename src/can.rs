@@ -1,18 +1,33 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2025 Au-Zone Technologies. All Rights Reserved.
+
 use crc16::{State, CCITT_FALSE};
 use log::{debug, trace};
 use socketcan::{tokio::CanSocket, CanFrame, EmbeddedFrame, Id as CanId, StandardId};
 use std::{fmt, io};
 
 #[allow(unused)]
+/// DRVEGRD protocol error types.
+///
+/// Follows UATv4 protocol specification naming conventions.
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug)]
 pub enum Error {
+    /// I/O error from underlying socket operations
     Io(io::Error),
+    /// Invalid header format or content
     InvalidHeader(String),
+    /// Message sequence number mismatch
     OutOfSequence(String),
+    /// No CAN socket available
     NoSocket,
+    /// Response ID does not match request
     InvalidResponseId(u16),
+    /// Unsupported UAT protocol version
     UATProtocolUnsupported(u16),
+    /// CRC check failed
     UATCRCError,
+    /// UAT protocol error code
     UATError(u16),
 }
 
@@ -41,15 +56,21 @@ impl fmt::Display for Error {
     }
 }
 
+/// Raw CAN message packet from DRVEGRD radar.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Packet {
+    /// CAN message ID (extended 29-bit)
     pub id: u32,
+    /// 8-byte data payload as u64
     pub data: u64,
 }
 
+/// Complete radar frame containing header and target list.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Frame {
+    /// Frame header with timing and configuration
     pub header: Header,
+    /// Array of detected targets (up to 256)
     pub targets: [Target; 256],
 }
 
@@ -64,26 +85,43 @@ impl fmt::Display for Frame {
     }
 }
 
+/// Radar frame header with timing and configuration data.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Header {
+    /// Timestamp seconds (UNIX epoch)
     pub seconds: u32,
+    /// Timestamp nanoseconds
     pub nanoseconds: u32,
+    /// Frame cycle duration in seconds
     pub cycle_duration: f64,
+    /// Sequential frame counter
     pub cycle_counter: u32,
+    /// Number of valid targets in frame
     pub n_targets: usize,
+    /// Active transmit antenna ID
     pub tx_antenna: u8,
+    /// Frequency sweep configuration
     pub frequency_sweep: u8,
+    /// Center frequency setting (76-77 GHz)
     pub center_frequency: u8,
 }
 
+/// Detected radar target with position and characteristics.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Target {
+    /// Range distance in meters
     pub range: f64,
+    /// Azimuth angle in radians
     pub azimuth: f64,
+    /// Elevation angle in radians
     pub elevation: f64,
+    /// Radial velocity in m/s
     pub speed: f64,
+    /// Radar cross-section in dBsm
     pub rcs: f64,
+    /// Received power in dBm
     pub power: f64,
+    /// Noise level in dBm
     pub noise: f64,
 }
 
@@ -97,14 +135,24 @@ enum MessageType {
     ParameterWriteRead = 4,
 }
 
+/// Configurable radar parameters.
+///
+/// These parameters can be read and written via CAN to configure
+/// the radar sensor operation.
 #[allow(unused)]
 #[derive(Copy, Clone, Debug)]
 pub enum Parameter {
+    /// Transmit antenna selection (0-3)
     TxAntenna = 0,
+    /// Center frequency setting (76-77 GHz)
     CenterFrequency = 1,
+    /// Frequency sweep bandwidth
     FrequencySweep = 2,
+    /// Range mode toggle
     RangeToggle = 5,
+    /// Detection sensitivity threshold
     DetectionSensitivity = 13,
+    /// Enable/disable target list output
     EnableTargetList = 200,
 }
 
@@ -133,12 +181,23 @@ impl clap::ValueEnum for Parameter {
     }
 }
 
+// Smart Micro DRVEGRD Protocol: Status Query Values
+/// Radar sensor status and version information fields.
+///
+/// Used by drvegrdctl for sensor diagnostics and version information.
+/// See: DRVEGRD Communication Protocol Specification v4.2, Section 5.2
+#[allow(dead_code)]
 #[derive(Copy, Clone, Debug)]
 pub enum Status {
+    /// Software generation number
     SoftwareGeneration = 2,
+    /// Major version number
     MajorVersion = 3,
+    /// Minor version number
     MinorVersion = 4,
+    /// Patch version number
     PatchVersion = 5,
+    /// Sensor serial number
     SerialNumber = 9,
 }
 
@@ -166,14 +225,27 @@ impl clap::ValueEnum for Status {
     }
 }
 
+/// Sensor control commands.
+///
+/// Smart Micro DRVEGRD Protocol: Sensor Control Commands
+/// Used by drvegrdctl for sensor configuration and management.
+/// See: DRVEGRD Communication Protocol Specification v4.2, Section 5.1
+#[allow(dead_code)]
 #[derive(Copy, Clone, Debug)]
 pub enum Command {
+    /// Reset sensor to factory defaults
     FactoryReset = 340,
+    /// Soft reset of sensor
     SensorReset = 342,
+    /// Save current parameters to non-volatile memory
     SaveParameters = 344,
+    /// Reset parameters to last saved values
     ResetParameters = 345,
+    /// Restore default parameter values
     DefaultParameters = 346,
+    /// Set timestamp seconds
     SetSeconds = 350,
+    /// Set timestamp fractional seconds
     SetFractionalSeconds = 351,
 }
 
@@ -299,6 +371,10 @@ impl From<&InstructionMessage2> for [u8; 8] {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
+// Smart Micro DRVEGRD Protocol: Response Message Header
+// First frame of multi-frame response from sensor.
+// See: DRVEGRD Communication Protocol Specification v4.2, Section 5.3
+#[allow(dead_code)]
 struct ResponseHeader {
     pub udt_index: u16,
     pub protocol_version: u16,
@@ -335,6 +411,9 @@ impl From<u64> for ResponseHeader {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
+// Smart Micro DRVEGRD Protocol: Response Message Frame 1
+// Second frame of multi-frame response (value bytes 0-7).
+#[allow(dead_code)]
 struct ResponseMessage1 {
     pub udt_index: u16,
     pub message_index: u8,
@@ -371,6 +450,9 @@ impl From<u64> for ResponseMessage1 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
+// Smart Micro DRVEGRD Protocol: Response Message Frame 2
+// Third frame of multi-frame response (value bytes 8-15).
+#[allow(dead_code)]
 struct ResponseMessage2 {
     pub udt_index: u16,
     pub message_index: u8,
@@ -404,6 +486,9 @@ impl From<u64> for ResponseMessage2 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
+// Smart Micro DRVEGRD Protocol: Response Message Frame 3
+// Fourth frame of multi-frame response (value bytes 16-23).
+#[allow(dead_code)]
 struct ResponseMessage3 {
     pub udt_index: u16,
     pub message_index: u8,
@@ -442,6 +527,9 @@ impl From<u64> for ResponseMessage3 {
 }
 
 /// Calculates the CRC16-CCITT checksum for the given message.
+// Calculate CRC-16 CCITT for command/response messages.
+// Used by sensor control functions (drvegrdctl).
+#[allow(dead_code)]
 fn message_crc(
     header: &InstructionHeader,
     message1: &InstructionMessage1,
@@ -461,6 +549,10 @@ fn message_crc(
 
 /// Sends a prepared instruction request to the SmartMicro using the UATv4
 /// protocol.
+// Send instruction message to sensor (write command/parameter).
+// Used by drvegrdctl for sensor configuration.
+// See: DRVEGRD Communication Protocol Specification v4.2, Section 5.1
+#[allow(dead_code)]
 async fn send_instruction(
     sock: &CanSocket,
     header: InstructionHeader,
@@ -484,6 +576,9 @@ async fn send_instruction(
 
 /// Receives an instruction response from the SmartMicro using the UATv4
 /// protocol.
+// Receive and parse response message from sensor.
+// Used by drvegrdctl for reading sensor state and diagnostics.
+#[allow(dead_code)]
 async fn recv_response(sock: &CanSocket) -> Result<u32, Error> {
     let mut header = Packet { id: 0, data: 0 };
 
@@ -538,6 +633,22 @@ async fn recv_response(sock: &CanSocket) -> Result<u32, Error> {
     Ok(message2.value)
 }
 
+/// Send command to sensor and await response.
+///
+/// # Arguments
+/// * `sock` - Active CAN socket connection
+/// * `command` - Command to execute
+/// * `value` - Command parameter value
+///
+/// # Returns
+/// Response value from sensor
+///
+/// # Errors
+/// Returns Error if CAN communication fails or sensor reports error
+///
+/// Public API for drvegrdctl binary.
+/// See: DRVEGRD Communication Protocol Specification v4.2, Section 5.1
+#[allow(dead_code)]
 pub async fn send_command(sock: &CanSocket, command: Command, value: u32) -> Result<u32, Error> {
     debug!("send_command {:?} {}", command, value);
 
@@ -570,6 +681,22 @@ pub async fn send_command(sock: &CanSocket, command: Command, value: u32) -> Res
     recv_response(sock).await
 }
 
+/// Write parameter value to sensor.
+///
+/// # Arguments
+/// * `sock` - Active CAN socket connection
+/// * `param` - Parameter to write
+/// * `value` - New parameter value
+///
+/// # Returns
+/// Confirmation value from sensor
+///
+/// # Errors
+/// Returns Error if CAN communication fails or sensor reports error
+///
+/// Public API for drvegrdctl binary.
+/// See: DRVEGRD Communication Protocol Specification v4.2, Section 4.1
+#[allow(dead_code)]
 pub async fn write_parameter(sock: &CanSocket, param: Parameter, value: u32) -> Result<u32, Error> {
     debug!("write_parameter {:?} {}", param, value);
 
@@ -602,6 +729,21 @@ pub async fn write_parameter(sock: &CanSocket, param: Parameter, value: u32) -> 
     recv_response(sock).await
 }
 
+/// Read parameter value from sensor.
+///
+/// # Arguments
+/// * `sock` - Active CAN socket connection
+/// * `param` - Parameter to read
+///
+/// # Returns
+/// Current parameter value
+///
+/// # Errors
+/// Returns Error if CAN communication fails or sensor reports error
+///
+/// Public API for drvegrdctl binary.
+/// See: DRVEGRD Communication Protocol Specification v4.2, Section 4.1
+#[allow(dead_code)]
 pub async fn read_parameter(sock: &CanSocket, param: Parameter) -> Result<u32, Error> {
     debug!("read_parameter {:?}", param);
 
@@ -634,6 +776,21 @@ pub async fn read_parameter(sock: &CanSocket, param: Parameter) -> Result<u32, E
     recv_response(sock).await
 }
 
+/// Read status field from sensor.
+///
+/// # Arguments
+/// * `sock` - Active CAN socket connection
+/// * `status` - Status field to read
+///
+/// # Returns
+/// Current status value
+///
+/// # Errors
+/// Returns Error if CAN communication fails or sensor reports error
+///
+/// Public API for drvegrdctl binary.
+/// See: DRVEGRD Communication Protocol Specification v4.2, Section 5.2
+#[allow(dead_code)]
 pub async fn read_status(sock: &CanSocket, status: Status) -> Result<u32, Error> {
     debug!("read_status");
 
@@ -719,6 +876,21 @@ pub async fn read_message(sock: &CanSocket) -> Result<Frame, Error> {
     Ok(Frame { header, targets })
 }
 
+/// Parse radar frame header from CAN data payload.
+///
+/// # Arguments
+/// * `data` - 8-byte CAN frame data as u64
+/// * `hdr` - Optional previous header for multi-packet accumulation
+///
+/// # Returns
+/// Complete or partial Header structure
+///
+/// # Errors
+/// Returns Error if header format is invalid
+///
+/// Alternative header parsing function for testing/debugging.
+/// Kept for protocol documentation and future use.
+#[allow(dead_code)]
 pub fn read_header(data: u64, hdr: Option<Header>) -> Result<Header, Error> {
     match (data >> 62) & 3 {
         0 => read_header_0(data, hdr),
@@ -831,6 +1003,18 @@ fn read_header_2(data: u64, hdr: Option<Header>) -> Result<Header, Error> {
     }
 }
 
+/// Parse radar target data from CAN payload.
+///
+/// # Arguments
+/// * `data` - 8-byte CAN frame data as u64
+/// * `tgt` - Optional previous target for multi-packet accumulation
+///
+/// # Returns
+/// Complete or partial Target structure
+///
+/// Alternative target data parsing function for testing/debugging.
+/// Kept for protocol documentation and future use.
+#[allow(dead_code)]
 pub fn read_data(data: u64, tgt: Option<Target>) -> Target {
     match data & 1 != 0 {
         true => read_data_1(data, tgt),
@@ -897,6 +1081,16 @@ fn load_data(data: &[u8]) -> u64 {
     u64::from_le_bytes(data[0..8].try_into().unwrap())
 }
 
+/// Read next CAN frame from socket.
+///
+/// # Arguments
+/// * `can` - Active CAN socket
+///
+/// # Returns
+/// Next Packet from CAN bus
+///
+/// # Errors
+/// Returns Error if socket read fails
 pub async fn read_frame(can: &CanSocket) -> Result<Packet, Error> {
     match can.read_frame().await {
         Ok(CanFrame::Data(frame)) => {

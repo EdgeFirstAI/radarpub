@@ -1,0 +1,177 @@
+# GitHub Actions workflow for testing and code quality
+#
+# Based on Au-Zone SPS templates (v2.0)
+# Customized for RadarPub Rust project
+
+name: Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_call:  # Allow other workflows to call this
+
+jobs:
+  test:
+    name: Test and Coverage (${{ matrix.platform.name }})
+    runs-on: ${{ matrix.platform.runner }}
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+    strategy:
+      matrix:
+        platform:
+          - name: x86_64
+            runner: ubuntu-22.04
+          - name: aarch64
+            runner: ubuntu-22.04
+            cross: true
+      fail-fast: false
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better analysis
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Install cross (for ARM64)
+        if: matrix.platform.cross
+        uses: taiki-e/install-action@cross
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-${{ matrix.platform.name }}-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Set up virtual CAN interface
+        if: ${{ !matrix.platform.cross }}
+        run: |
+          sudo modprobe vcan
+          sudo ip link add dev vcan0 type vcan
+          sudo ip link set up vcan0
+
+      - name: Run tests with coverage (native)
+        if: ${{ !matrix.platform.cross }}
+        run: |
+          cargo llvm-cov --all-features --workspace --cobertura --output-path coverage.xml
+        env:
+          RADAR_CAN_INTERFACE: vcan0
+
+      - name: Build for ARM64 (cross-compile only)
+        if: matrix.platform.cross
+        run: |
+          cross build --target aarch64-unknown-linux-gnu --release --all-features
+
+      - name: Upload coverage to Codecov
+        if: ${{ !matrix.platform.cross }}
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage.xml
+          flags: unittests
+          name: codecov-${{ matrix.platform.name }}
+          fail_ci_if_error: false
+
+  format:
+    name: Format Check
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy Lint
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Run clippy (all features)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      
+      - name: Run clippy (no default features)
+        run: cargo clippy --all-targets --no-default-features -- -D warnings
+      
+      - name: Run clippy (minimal features - radarpub)
+        run: cargo clippy --bin radarpub --features can,zenoh -- -D warnings
+
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+      
+      - name: Run security audit
+        run: cargo audit
+
+  deny:
+    name: License & Dependency Check
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Install cargo-deny
+        run: cargo install cargo-deny
+      
+      - name: Check licenses and dependencies
+        run: cargo deny check

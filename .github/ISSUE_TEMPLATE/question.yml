@@ -1,0 +1,59 @@
+name: Question
+description: Ask a question about using RadarPub
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have a question? We're here to help!
+        
+        **Before asking:** Check the [README](../README.md), [ARCHITECTURE](../ARCHITECTURE.md), and [existing discussions](../../discussions).
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What would you like to know?
+      placeholder: How do I...?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      description: What is your question about?
+      options:
+        - Installation / Setup
+        - Configuration
+        - Hardware integration (radar sensors, CAN)
+        - Zenoh / ROS2 integration
+        - Performance tuning
+        - Troubleshooting / Debugging
+        - EdgeFirst Studio integration
+        - Contributing / Development
+        - Other
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Provide any relevant details about your setup, what you've tried, etc.
+      placeholder: |
+        Platform: Maivin
+        Version: v0.2.0
+        Setup: ...
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and discussions
+          required: true
+        - label: I reviewed the documentation
+          required: false

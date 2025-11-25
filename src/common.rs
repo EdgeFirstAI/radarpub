@@ -1,6 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2025 Au-Zone Technologies. All Rights Reserved.
+
 use std::net::UdpSocket;
 use tracing::warn;
 
+/// Set real-time FIFO scheduler priority for current thread.
+///
+/// Configures SCHED_FIFO with priority 10 on Linux for low-latency processing.
+/// No-op on non-Linux platforms.
 #[cfg(target_os = "linux")]
 pub fn set_process_priority() {
     let mut param = libc::sched_param { sched_priority: 10 };
@@ -17,6 +24,14 @@ pub fn set_process_priority() {
 #[cfg(not(target_os = "linux"))]
 pub fn set_process_priority() {}
 
+/// Configure UDP socket receive buffer size.
+///
+/// # Arguments
+/// * `socket` - UDP socket to configure
+/// * `size` - Buffer size in bytes
+///
+/// # Returns
+/// Configured socket
 #[cfg(target_os = "linux")]
 pub fn set_socket_bufsize(socket: UdpSocket, size: usize) -> UdpSocket {
     use std::os::fd::{FromRawFd, IntoRawFd};

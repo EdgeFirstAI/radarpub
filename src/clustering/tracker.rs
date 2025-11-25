@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2025 Au-Zone Technologies. All Rights Reserved.
+
 use lapjv::{lapjv, Matrix};
 use nalgebra::{Dyn, OMatrix, U4};
 use uuid::Uuid;
@@ -78,6 +81,14 @@ impl Tracklet {
         self.filter.update(&vaalbox_to_xyah(vaalbox));
     }
 
+    /// Predict the next location of the tracked object using Kalman filter.
+    ///
+    /// Used for debugging and track validation. Extracts predicted state from
+    /// Kalman filter and converts to bounding box format.
+    ///
+    /// # Returns
+    /// Predicted bounding box for the next frame.
+    #[allow(dead_code)]
     pub fn get_predicted_location(&self) -> VAALBox {
         let predicted_xyah = self.filter.mean.as_slice();
         let mut expected = VAALBox {

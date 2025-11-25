@@ -1,0 +1,128 @@
+# GitHub Actions workflow for publishing releases
+#
+# Based on Au-Zone SPS templates (v2.0)
+# Customized for RadarPub Rust project
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  prepare-release:
+    name: Prepare Release Information
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      changelog: ${{ steps.changelog.outputs.changelog }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION"
+
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          CHANGELOG=$(awk -v ver="$VERSION" '
+            /^## \['"$VERSION"'\]/ { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md)
+          
+          if [ -z "$CHANGELOG" ]; then
+            echo "WARNING: No changelog entry found for version $VERSION"
+            CHANGELOG="See [CHANGELOG.md](CHANGELOG.md) for details."
+          fi
+          
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+  run-tests:
+    name: Run Tests
+    needs: prepare-release
+    uses: ./.github/workflows/test.yml
+
+  build-artifacts:
+    name: Build Release Artifacts
+    needs: prepare-release
+    uses: ./.github/workflows/build.yml
+
+  build-sbom:
+    name: Generate SBOM
+    needs: prepare-release
+    uses: ./.github/workflows/sbom.yml
+
+  publish-github-release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-22.04
+    needs: [prepare-release, run-tests, build-artifacts, build-sbom]
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          find artifacts/package-* -name "*.tar.gz" -exec cp {} release-assets/ \;
+          cp artifacts/sbom/sbom.json release-assets/radarpub-${{ needs.prepare-release.outputs.version }}-sbom.json
+          ls -lh release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: RadarPub v${{ needs.prepare-release.outputs.version }}
+          body: |
+            ## RadarPub v${{ needs.prepare-release.outputs.version }}
+            
+            ${{ needs.prepare-release.outputs.changelog }}
+            
+            ---
+            
+            ### Installation
+            
+            Download the appropriate package for your platform:
+            - `radarpub-*-x86_64-linux.tar.gz` - Linux x86_64
+            - `radarpub-*-aarch64-linux.tar.gz` - Linux ARM64 (Maivin/Raivin)
+            
+            Extract and install:
+            ```bash
+            tar -xzf radarpub-*.tar.gz
+            cd radarpub-*/
+            sudo cp bin/* /usr/local/bin/
+            ```
+            
+            ### Documentation
+            
+            - [README](https://github.com/EdgeFirstAI/radarpub/blob/main/README.md)
+            - [Architecture](https://github.com/EdgeFirstAI/radarpub/blob/main/ARCHITECTURE.md)
+            - [Contributing](https://github.com/EdgeFirstAI/radarpub/blob/main/CONTRIBUTING.md)
+            
+            ### SBOM & License
+            
+            Software Bill of Materials: `radarpub-${{ needs.prepare-release.outputs.version }}-sbom.json`
+            
+            License: Apache-2.0
+          files: release-assets/*
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true

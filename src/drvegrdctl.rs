@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2025 Au-Zone Technologies. All Rights Reserved.
+
 mod can;
 
 use can::{read_parameter, read_status, send_command, write_parameter, Command, Parameter, Status};

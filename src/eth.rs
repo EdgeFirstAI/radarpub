@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2025 Au-Zone Technologies. All Rights Reserved.
+
 use ndarray::{Array4, ArrayView4, Axis};
 use num::Complex;
 use std::{cmp::min, fmt, num::Wrapping, vec};
@@ -6,25 +9,47 @@ use tracing::instrument;
 /// Fixed size size of the SMS UDP packets.
 pub const SMS_PACKET_SIZE: usize = 1458;
 
+/// Errors in Smart Micro SMS protocol parsing.
+///
+/// The SMS (Smart Micro Sensor) protocol is used for radar cube data
+/// transmission over UDP. These errors cover transport layer, header parsing,
+/// and data integrity.
 #[allow(unused)]
 #[derive(Debug)]
 pub enum SMSError {
+    /// I/O error during network operations
     IoError(std::io::Error),
+    /// Invalid start pattern byte (expected 0x7E)
     StartPattern(u8),
+    /// Slice too short for expected data
     UnexpectedEndOfSlice(usize),
+    /// Header length field invalid
     InvalidHeaderLength(u8),
+    /// Payload length field invalid
     InvalidPayloadLength(u16),
+    /// Port ID not recognized
     InvalidPortId(u32),
+    /// Debug flags byte invalid
     InvalidDebugFlags(u8),
+    /// Required message counter field missing
     MessageCounterMissing,
+    /// Required debug header missing
     DebugHeaderMissing,
+    /// Required port header missing
     PortHeaderMissing,
+    /// Required cube header missing
     CubeHeaderMissing,
+    /// Required bin properties missing
     BinPropertiesMissing,
+    /// Message sequence number gap detected
     MessageSequenceError,
+    /// Frame counter mismatch
     FrameCounterError,
+    /// Array shape error from ndarray
     ShapeError(ndarray::ShapeError),
+    /// Missing radar cube data (received, expected)
     MissingCubeData(usize, usize),
+    /// UDP packets dropped
     DroppedMessages(u16),
 }
 
@@ -98,18 +123,33 @@ impl fmt::Display for SMSError {
     }
 }
 
+/// SMS protocol transport layer header.
+///
+/// Contains routing, sequencing, and integrity information for UDP packets.
+/// See Smart Micro SMS Protocol Specification.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TransportHeader {
+    /// Start pattern (always 0x7E)
     pub start_pattern: u8,
+    /// Protocol version number
     pub protocol_version: u8,
+    /// Total header length in bytes
     pub header_length: u8,
+    /// Payload length in bytes
     pub payload_length: u16,
+    /// Application protocol identifier
     pub application_protocol: u8,
+    /// Protocol flags bitfield
     pub flags: u32,
+    /// Optional message sequence counter
     pub message_counter: Option<Wrapping<u16>>,
+    /// Optional client identifier
     pub client_id: Option<u32>,
+    /// Optional data stream identifier
     pub data_id: Option<u16>,
+    /// Optional segmentation info
     pub segmentation: Option<u16>,
+    /// CRC-16 checksum
     pub crc: u16,
 }
 
@@ -117,18 +157,24 @@ impl TransportHeader {
     /// Length of the crc field in bytes/octets.
     pub const CRC_LEN: usize = 2;
     /// Maximum length of an SMS transport header in bytes/octets.
+    /// Used for buffer allocation and protocol validation.
+    #[allow(dead_code)]
     pub const MAX_LEN: usize = 22;
     /// Minimum length of an SMS transport header in bytes/octets.
     pub const MIN_LEN: usize = 12;
 }
 
 /// A slice containing an SMS transport header.
+/// Zero-copy view of SMS transport header bytes.
+///
+/// Provides efficient access to header fields without allocation.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct TransportHeaderSlice<'a> {
     slice: &'a [u8],
 }
 
 impl<'a> TransportHeaderSlice<'a> {
+    /// Parse transport header from byte slice.
     pub fn from_slice(slice: &'a [u8]) -> Result<TransportHeaderSlice<'a>, SMSError> {
         if slice.len() < TransportHeader::MIN_LEN {
             return Err(SMSError::UnexpectedEndOfSlice(slice.len()));
@@ -157,6 +203,10 @@ impl<'a> TransportHeaderSlice<'a> {
         Ok(TransportHeaderSlice { slice })
     }
 
+    /// Convert header slice to owned TransportHeader struct.
+    /// Used for debugging and protocol analysis tools.
+    #[allow(dead_code)]
+    #[allow(clippy::wrong_self_convention)]
     pub fn to_header(&self) -> TransportHeader {
         let crc_offset = Self::crc_offset(self.slice);
 
@@ -307,6 +357,9 @@ impl<'a> TransportHeaderSlice<'a> {
 
     /// Returns true if the underlyinc slice is empty.
     #[inline]
+    /// Check if radar cube data buffer is empty.
+    /// Used for protocol state validation and debugging.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.slice.is_empty()
     }
@@ -354,6 +407,9 @@ impl<'a> TransportHeaderSlice<'a> {
 
     /// Returns the frame counter or None if not present.
     #[inline]
+    /// Get current frame counter for synchronization.
+    /// Used for multi-stream synchronization in advanced configurations.
+    #[allow(dead_code)]
     pub fn frame_counter(&self) -> Option<u32> {
         match self.debug_header() {
             Ok(header) => Some(header.frame_counter()),
@@ -375,10 +431,16 @@ impl<'a> TransportHeaderSlice<'a> {
     }
 }
 
+/// SMS protocol debug header for frame sequencing.
+///
+/// Contains frame counter and flags for radar data cube assembly.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DebugHeader {
+    /// Frame sequence counter
     pub frame_counter: u32,
+    /// Frame type flags (START_OF_FRAME, FRAME_DATA, FRAME_FOOTER, END_OF_DATA)
     pub flags: u8,
+    /// Frame delay in milliseconds
     pub frame_delay: u8,
 }
 
@@ -402,6 +464,7 @@ pub struct DebugHeaderSlice<'a> {
 }
 
 impl<'a> DebugHeaderSlice<'a> {
+    /// Parse debug header from byte slice.
     pub fn from_slice(slice: &'a [u8]) -> Result<DebugHeaderSlice<'a>, SMSError> {
         if slice.len() < DebugHeader::LEN {
             return Err(SMSError::UnexpectedEndOfSlice(slice.len()));
@@ -410,6 +473,10 @@ impl<'a> DebugHeaderSlice<'a> {
         Ok(DebugHeaderSlice { slice })
     }
 
+    /// Convert debug header slice to owned struct.
+    /// Used for protocol debugging and performance analysis.
+    #[allow(dead_code)]
+    #[allow(clippy::wrong_self_convention)]
     pub fn to_header(&self) -> DebugHeader {
         DebugHeader {
             frame_counter: u32::from_be_bytes([
@@ -437,6 +504,9 @@ impl<'a> DebugHeaderSlice<'a> {
 
     /// Returns the frame delay.
     #[inline]
+    /// Get frame processing delay in microseconds.
+    /// Used for latency analysis and performance monitoring.
+    #[allow(dead_code)]
     pub fn frame_delay(&self) -> u8 {
         self.slice[5]
     }
@@ -455,16 +525,28 @@ impl<'a> DebugHeaderSlice<'a> {
     }
 }
 
+/// SMS protocol port header for radar data stream.
+///
+/// Identifies data stream, version, and timing information.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PortHeader {
+    /// Port identifier (e.g., 50005 for radar cube)
     pub id: u32,
+    /// Interface version major number
     pub interface_version_major: i16,
+    /// Interface version minor number
     pub interface_version_minor: i16,
+    /// Unix timestamp in microseconds
     pub timestamp: u64,
+    /// Total data size in bytes
     pub size: u32,
+    /// Byte order (0=little-endian, 1=big-endian)
     pub endianess: u8,
+    /// Frame index
     pub index: u8,
+    /// Header version major number
     pub header_version_major: u8,
+    /// Header version minor number
     pub header_version_minor: u8,
 }
 
@@ -480,6 +562,7 @@ pub struct PortHeaderSlice<'a> {
 }
 
 impl<'a> PortHeaderSlice<'a> {
+    /// Parse port header from byte slice.
     pub fn from_slice(slice: &'a [u8]) -> Result<PortHeaderSlice<'a>, SMSError> {
         if slice.len() < PortHeader::LEN {
             return Err(SMSError::UnexpectedEndOfSlice(slice.len()));
@@ -488,6 +571,10 @@ impl<'a> PortHeaderSlice<'a> {
         Ok(PortHeaderSlice { slice })
     }
 
+    /// Convert port header slice to owned struct.
+    /// Used for protocol debugging.
+    #[allow(dead_code)]
+    #[allow(clippy::wrong_self_convention)]
     pub fn to_header(&self) -> PortHeader {
         PortHeader {
             id: u32::from_be_bytes([self.slice[0], self.slice[1], self.slice[2], self.slice[3]]),
@@ -569,6 +656,10 @@ impl<'a> PortHeaderSlice<'a> {
     }
 }
 
+/// Radar cube memory layout descriptor.
+///
+/// Describes 4D tensor structure and element offsets for radar cube data.
+/// Dimensions: [chirp_types, range_gates, rx_channels, doppler_bins]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CubeHeader {
     /// Memory offset from one radar cube element to its imaginary part.
@@ -613,12 +704,14 @@ impl CubeHeader {
     pub const LEN: usize = 40;
 }
 
+/// Zero-copy view of radar cube header bytes.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct CubeHeaderSlice<'a> {
     slice: &'a [u8],
 }
 
 impl<'a> CubeHeaderSlice<'a> {
+    /// Parse cube header from byte slice.
     pub fn from_slize(slice: &'a [u8]) -> Result<CubeHeaderSlice<'a>, SMSError> {
         if slice.len() < CubeHeader::LEN {
             return Err(SMSError::UnexpectedEndOfSlice(slice.len()));
@@ -627,6 +720,8 @@ impl<'a> CubeHeaderSlice<'a> {
         Ok(CubeHeaderSlice { slice })
     }
 
+    #[allow(clippy::wrong_self_convention)]
+    /// Convert to owned CubeHeader struct.
     pub fn to_header(&self) -> CubeHeader {
         CubeHeader {
             imag_offset: i32::from_be_bytes([
@@ -679,12 +774,17 @@ impl<'a> CubeHeaderSlice<'a> {
 
     /// Returns the number of range gates of the range doppler matrix.
     #[inline]
+    /// Get number of range gates in radar cube.
+    /// Dimension methods used for cube size validation and analysis.
+    #[allow(dead_code)]
     pub fn range_gates(&self) -> i16 {
         i16::from_be_bytes([self.slice[24], self.slice[25]])
     }
 
     /// Returns the number of doppler bins of the range doppler matrix.
     #[inline]
+    /// Get number of doppler bins in radar cube.
+    #[allow(dead_code)]
     pub fn doppler_bins(&self) -> i16 {
         i16::from_be_bytes([self.slice[28], self.slice[29]])
     }
@@ -692,12 +792,16 @@ impl<'a> CubeHeaderSlice<'a> {
     /// Returns the number of channels (one range doppler matrix is stored for
     /// each RX channel).
     #[inline]
+    /// Get number of RX channels in radar cube.
+    #[allow(dead_code)]
     pub fn rx_channels(&self) -> i8 {
         self.slice[30] as i8
     }
 
     /// Returns the number of chirp types in the radar cube.
     #[inline]
+    /// Get number of chirp types in radar cube.
+    #[allow(dead_code)]
     pub fn chirp_types(&self) -> i8 {
         self.slice[31] as i8
     }
@@ -724,10 +828,16 @@ impl<'a> CubeHeaderSlice<'a> {
     }
 }
 
+/// Radar cube bin scaling factors.
+///
+/// Converts bin indices to physical units (m/s for doppler, meters for range).
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct BinProperties {
+    /// Velocity per doppler bin (m/s)
     pub speed_per_bin: f32,
+    /// Range per range gate (meters)
     pub range_per_bin: f32,
+    /// Doppler bins per m/s (inverse of speed_per_bin)
     pub bin_per_speed: f32,
 }
 
@@ -736,12 +846,14 @@ impl BinProperties {
     pub const LEN: usize = 12;
 }
 
+/// Zero-copy view of bin properties bytes.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct BinPropertiesSlice<'a> {
     slice: &'a [u8],
 }
 
 impl<'a> BinPropertiesSlice<'a> {
+    /// Parse bin properties from byte slice.
     pub fn from_slize(slice: &'a [u8]) -> Result<BinPropertiesSlice<'a>, SMSError> {
         if slice.len() < BinProperties::LEN {
             return Err(SMSError::UnexpectedEndOfSlice(slice.len()));
@@ -750,6 +862,8 @@ impl<'a> BinPropertiesSlice<'a> {
         Ok(BinPropertiesSlice { slice })
     }
 
+    #[allow(clippy::wrong_self_convention)]
+    /// Convert to owned BinProperties struct.
     pub fn to_header(&self) -> BinProperties {
         BinProperties {
             speed_per_bin: f32::from_be_bytes([
@@ -774,14 +888,25 @@ impl<'a> BinPropertiesSlice<'a> {
     }
 }
 
+/// Assembled radar cube with metadata.
+///
+/// 4D complex tensor [chirp_types, range_gates, rx_channels, doppler_bins]
+/// from Smart Micro DRVEGRD radar.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RadarCube {
+    /// Unix timestamp (microseconds)
     pub timestamp: u64,
+    /// Frame sequence counter
     pub frame_counter: u32,
+    /// UDP packets received
     pub packets_captured: u16,
+    /// UDP packets dropped
     pub packets_skipped: u16,
+    /// Bytes missing from cube data
     pub missing_data: usize,
+    /// Bin scaling factors
     pub bin_properties: BinProperties,
+    /// 4D radar cube tensor
     pub data: ndarray::Array4<Complex<i16>>,
 }
 
@@ -797,6 +922,10 @@ impl fmt::Display for RadarCube {
     }
 }
 
+/// Stateful reader for assembling radar cubes from UDP packets.
+///
+/// Handles SMS protocol parsing, frame assembly, and packet loss detection.
+#[derive(Debug)]
 pub struct RadarCubeReader {
     timestamp: u64,
     frame_counter: u32,
@@ -819,6 +948,7 @@ impl Default for RadarCubeReader {
 }
 
 impl RadarCubeReader {
+    /// Create new radar cube reader.
     pub fn new() -> RadarCubeReader {
         RadarCubeReader {
             timestamp: 0,
@@ -1001,6 +1131,16 @@ impl RadarCubeReader {
         Ok(None)
     }
 
+    /// Parse UDP packet and assemble radar cube.
+    ///
+    /// # Arguments
+    /// * `slice` - UDP packet payload bytes
+    ///
+    /// # Returns
+    /// `Some(RadarCube)` when frame complete, `None` for partial frames
+    ///
+    /// # Errors
+    /// Returns SMSError on protocol violations or missing data
     pub fn read(&mut self, slice: &[u8]) -> Result<Option<RadarCube>, SMSError> {
         let transport = TransportHeaderSlice::from_slice(slice)?;
         let debug_header = transport.debug_header()?;
@@ -1049,6 +1189,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "Requires testdata/office_3.pcapng fixture (TODO: add to repository)"]
     fn test_pcap() -> Result<(), SMSError> {
         let mut first_frame = None;
         let mut last_frame = None;

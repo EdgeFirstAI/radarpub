@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2025 Au-Zone Technologies. All Rights Reserved.
+
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use dbscan::{Classification, Model};
@@ -6,6 +9,10 @@ use uuid::Uuid;
 
 mod kalman;
 mod tracker;
+/// DBSCAN-based spatial clustering with ByteTrack multi-object tracking.
+///
+/// Clusters radar targets using DBSCAN algorithm and tracks objects across
+/// frames using Kalman filtering and IoU matching.
 #[derive(Debug, Clone, Default)]
 pub struct Clustering {
     /// Clustering DBSCAN distance limit (euclidean distance)
@@ -35,6 +42,17 @@ pub struct Clustering {
 }
 
 impl Clustering {
+    /// Create new clustering instance.
+    ///
+    /// # Arguments
+    /// * `clustering_eps` - DBSCAN epsilon (maximum distance between points in
+    ///   cluster)
+    /// * `clustering_param_scale` - Scaling factors for [x, y, z, speed] axes
+    ///   (0 to ignore axis)
+    /// * `clustering_point_limit` - Minimum points to form cluster (minimum 3)
+    ///
+    /// # Returns
+    /// Configured clustering instance with ByteTrack tracker
     pub fn new(
         clustering_eps: f64,
         clustering_param_scale: &[f32],
@@ -203,6 +221,14 @@ impl Clustering {
         }
     }
 
+    /// Retrieve current tracked object locations in bounding box format.
+    ///
+    /// Used for debugging and visualization. Converts internal Kalman filter
+    /// state to [xmin, ymin, xmax, ymax] format for each tracked object.
+    ///
+    /// # Returns
+    /// Vector of bounding boxes, one per tracked object.
+    #[allow(dead_code)]
     pub fn get_tracklets(&mut self) -> Vec<Vec<f32>> {
         let tracklets = self.tracker.get_tracklets();
         let mut ret = Vec::new();
