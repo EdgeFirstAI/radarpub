@@ -75,6 +75,7 @@ serde_json = "1.0.145"
 socketcan = { version = "3.5.0", features = ["tokio"], optional = true }
 tokio = { version = "1.45.0", features = [
     "rt-multi-thread",
+    "net",
     "time",
     "io-std",
     "tracing",
