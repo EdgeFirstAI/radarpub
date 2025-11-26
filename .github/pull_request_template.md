@@ -1,6 +1,6 @@
 ## JIRA Ticket
 
-Link: [PROJECTKEY-###](https://au-zone.atlassian.net/browse/PROJECTKEY-###)
+Link: [EDGEAI-###](https://au-zone.atlassian.net/browse/EDGEAI-###)
 
 ## Changes
 

@@ -99,8 +99,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CAN DRVEGRD messages now always treated as little endian
 - Clippy warnings resolved
 
-[Unreleased]: https://github.com/au-zone/radarpub/compare/v1.5.3...HEAD
-[1.5.3]: https://github.com/au-zone/radarpub/compare/v1.5.2...v1.5.3
-[1.5.2]: https://github.com/au-zone/radarpub/compare/v1.5.1...v1.5.2
+[Unreleased]: https://github.com/EdgeFirstAI/radarpub/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/EdgeFirstAI/radarpub/releases/tag/v1.6.0
+[1.5.3]: https://github.com/EdgeFirstAI/radarpub/compare/v1.5.2...v1.5.3
+[1.5.2]: https://github.com/EdgeFirstAI/radarpub/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/au-zone/radarpub/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/au-zone/radarpub/releases/tag/v1.5.0
