@@ -1125,7 +1125,7 @@ impl RadarCubeReader {
             let len = min(cube.len(), self.cube.len() - self.cube_index);
             self.cube[self.cube_index..(self.cube_index + len)].copy_from_slice(&cube[..len]);
             self.cube_index += cube.len();
-            self.cube_captured += len as usize;
+            self.cube_captured += len;
         }
 
         Ok(None)
