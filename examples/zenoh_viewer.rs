@@ -210,7 +210,8 @@ fn handle_pointcloud(
     payload: &[u8],
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Deserialize PointCloud2 message from CDR
-    let pointcloud: edgefirst_schemas::sensor_msgs::PointCloud2 = cdr::deserialize(payload)?;
+    let pointcloud: edgefirst_schemas::sensor_msgs::PointCloud2 =
+        edgefirst_schemas::serde_cdr::deserialize(payload)?;
 
     debug!(
         "Received PointCloud2: {} points, fields: {:?}",
@@ -248,7 +249,8 @@ fn handle_radar_cube(
     payload: &[u8],
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Deserialize RadarCube message
-    let cube: edgefirst_schemas::edgefirst_msgs::RadarCube = cdr::deserialize(payload)?;
+    let cube: edgefirst_schemas::edgefirst_msgs::RadarCube =
+        edgefirst_schemas::serde_cdr::deserialize(payload)?;
 
     debug!(
         "Received RadarCube: timestamp {} with {} cube elements",
@@ -278,7 +280,8 @@ fn handle_transform(
     payload: &[u8],
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Deserialize TransformStamped message
-    let tf: edgefirst_schemas::geometry_msgs::TransformStamped = cdr::deserialize(payload)?;
+    let tf: edgefirst_schemas::geometry_msgs::TransformStamped =
+        edgefirst_schemas::serde_cdr::deserialize(payload)?;
 
     debug!(
         "Received TF: {} -> {}",
