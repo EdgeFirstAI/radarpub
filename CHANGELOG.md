@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] - 2025-01-28
+
+### Changed
+
+- **CDR serialization migration**: Replaced direct `cdr` crate usage with `edgefirst_schemas::serde_cdr` API
+  for consistent ROS2 message serialization across EdgeFirst components
+- **Dependencies updated**:
+  - edgefirst-schemas v1.4.0 → v1.5.2 (provides serde_cdr API)
+  - Removed direct cdr dependency (now internal to edgefirst-schemas)
+- **CI/CD improvements**:
+  - Simplified test workflow (removed cross-compilation from tests, build handles that)
+  - Updated SBOM generation with cargo-cyclonedx output handling
+  - Fixed GPL license check to allow OR-alternatives (Apache-2.0 OR LGPL-2.1 OR MIT)
+  - Updated SonarCloud configuration for EdgeFirstAI organization
+
+### Added
+
+- TESTING.md: Comprehensive manual hardware testing documentation
+  - CAN and Ethernet mode setup instructions
+  - Virtual CAN configuration for local testing
+  - Troubleshooting guides for common issues
+
 ## [1.6.0] - 2025-01-25
 
 ### Changed
@@ -99,7 +121,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CAN DRVEGRD messages now always treated as little endian
 - Clippy warnings resolved
 
-[Unreleased]: https://github.com/EdgeFirstAI/radarpub/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/EdgeFirstAI/radarpub/compare/v1.6.1...HEAD
+[1.6.1]: https://github.com/EdgeFirstAI/radarpub/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/EdgeFirstAI/radarpub/releases/tag/v1.6.0
 [1.5.3]: https://github.com/EdgeFirstAI/radarpub/compare/v1.5.2...v1.5.3
 [1.5.2]: https://github.com/EdgeFirstAI/radarpub/compare/v1.5.1...v1.5.2

@@ -10,7 +10,6 @@ mod net;
 
 use args::{Args, CenterFrequency, DetectionSensitivity, FrequencySweep, RangeToggle};
 use can::{read_message, read_status, write_parameter, Parameter, Status, Target};
-use cdr::{CdrLe, Infinite};
 use clap::Parser;
 use clustering::Clustering;
 use core::f64;
@@ -18,7 +17,7 @@ use edgefirst_schemas::{
     builtin_interfaces::{self, Time},
     edgefirst_msgs::{self, RadarInfo},
     geometry_msgs::{Quaternion, Transform, TransformStamped, Vector3},
-    sensor_msgs,
+    sensor_msgs, serde_cdr,
     std_msgs::{self, Header},
 };
 use eth::{RadarCube, RadarCubeReader, SMS_PACKET_SIZE};
@@ -148,7 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         },
     };
-    let tf_msg = ZBytes::from(cdr::serialize::<_, _, CdrLe>(&tf_msg, Infinite).unwrap());
+    let tf_msg = ZBytes::from(serde_cdr::serialize(&tf_msg).unwrap());
     let tf_enc = Encoding::APPLICATION_CDR.with_schema("geometry_msgs/msg/TransformStamped");
     let tf_task = tokio::spawn(async move { tf_static(tf_session, tf_msg, tf_enc).await.unwrap() });
     std::mem::drop(tf_task);
@@ -166,7 +165,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let info_session = session.clone();
-    let info_msg = ZBytes::from(cdr::serialize::<_, _, CdrLe>(&info_msg, Infinite).unwrap());
+    let info_msg = ZBytes::from(serde_cdr::serialize(&info_msg).unwrap());
     let info_enc = Encoding::APPLICATION_CDR.with_schema("edgefirst_msgs/msg/RadarInfo");
     let tf_task =
         tokio::spawn(async move { radar_info(info_session, info_msg, info_enc).await.unwrap() });
@@ -263,7 +262,7 @@ fn format_targets(
     targets: &[Target],
     mirror: bool,
     frame_id: &str,
-) -> Result<(ZBytes, Encoding), cdr::Error> {
+) -> Result<(ZBytes, Encoding), Box<dyn std::error::Error>> {
     let n_targets = targets.len() as u32;
     let data: Vec<_> = targets
         .iter()
@@ -340,7 +339,7 @@ fn format_targets(
         is_dense: true,
     };
 
-    let msg = ZBytes::from(cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?);
+    let msg = ZBytes::from(serde_cdr::serialize(&msg)?);
     let enc = Encoding::APPLICATION_CDR.with_schema("sensor_msgs/msg/PointCloud2");
 
     Ok((msg, enc))
@@ -430,7 +429,7 @@ fn format_clusters<T: Iterator<Item = f32>>(
     clusters: T,
     mirror: bool,
     frame_id: String,
-) -> Result<(ZBytes, Encoding), cdr::Error> {
+) -> Result<(ZBytes, Encoding), Box<dyn std::error::Error>> {
     let data: Vec<_> = targets
         .iter()
         .zip(clusters)
@@ -513,7 +512,7 @@ fn format_clusters<T: Iterator<Item = f32>>(
         is_dense: true,
     };
 
-    let msg = ZBytes::from(cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?);
+    let msg = ZBytes::from(serde_cdr::serialize(&msg)?);
     let enc = Encoding::APPLICATION_CDR.with_schema("sensor_msgs/msg/PointCloud2");
 
     Ok((msg, enc))
@@ -615,7 +614,10 @@ async fn cube_loop(
 }
 
 #[instrument(skip_all, fields(shape = cubemsg.data.shape().iter().map(|s| s.to_string()).collect::<Vec<_>>().join(" ")))]
-fn format_cube(cubemsg: RadarCube, frame_id: &str) -> Result<(ZBytes, Encoding), cdr::Error> {
+fn format_cube(
+    cubemsg: RadarCube,
+    frame_id: &str,
+) -> Result<(ZBytes, Encoding), Box<dyn std::error::Error>> {
     let layout = vec![
         edgefirst_msgs::radar_cube_dimension::SEQUENCE,
         edgefirst_msgs::radar_cube_dimension::RANGE,
@@ -656,7 +658,7 @@ fn format_cube(cubemsg: RadarCube, frame_id: &str) -> Result<(ZBytes, Encoding),
         is_complex: true,
     };
 
-    let msg = ZBytes::from(cdr::serialize::<_, _, CdrLe>(&msg, Infinite)?);
+    let msg = ZBytes::from(serde_cdr::serialize(&msg)?);
     let enc = Encoding::APPLICATION_CDR.with_schema("edgefirst_msgs/msg/RadarCube");
 
     Ok((msg, enc))

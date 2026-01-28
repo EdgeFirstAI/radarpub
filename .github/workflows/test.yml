@@ -14,21 +14,12 @@ on:
 
 jobs:
   test:
-    name: Test and Coverage (${{ matrix.platform.name }})
-    runs-on: ${{ matrix.platform.runner }}
+    name: Test and Coverage
+    runs-on: ubuntu-22.04
     permissions:
       contents: read
       checks: write
       pull-requests: write
-    strategy:
-      matrix:
-        platform:
-          - name: x86_64
-            runner: ubuntu-22.04
-          - name: aarch64
-            runner: ubuntu-22.04
-            cross: true
-      fail-fast: false
 
     steps:
       - name: Checkout code
@@ -43,10 +34,6 @@ jobs:
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
-
-      - name: Install cross (for ARM64)
-        if: matrix.platform.cross
-        uses: taiki-e/install-action@cross
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -64,35 +51,27 @@ jobs:
         uses: actions/cache@v4
         with:
           path: target
-          key: ${{ runner.os }}-${{ matrix.platform.name }}-target-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Set up virtual CAN interface
-        if: ${{ !matrix.platform.cross }}
         continue-on-error: true
         run: |
           sudo modprobe vcan || echo "vcan module not available, tests will be limited"
           sudo ip link add dev vcan0 type vcan || true
           sudo ip link set up vcan0 || true
 
-      - name: Run tests with coverage (native)
-        if: ${{ !matrix.platform.cross }}
+      - name: Run tests with coverage
         run: |
           cargo llvm-cov --all-features --workspace --cobertura --output-path coverage.xml
         env:
           RADAR_CAN_INTERFACE: vcan0
 
-      - name: Build for ARM64 (cross-compile only)
-        if: matrix.platform.cross
-        run: |
-          cross build --target aarch64-unknown-linux-gnu --release --all-features
-
       - name: Upload coverage to Codecov
-        if: ${{ !matrix.platform.cross }}
         uses: codecov/codecov-action@v3
         with:
           files: ./coverage.xml
           flags: unittests
-          name: codecov-${{ matrix.platform.name }}
+          name: codecov-radarpub
           fail_ci_if_error: false
 
   format:

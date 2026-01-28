@@ -84,7 +84,7 @@ jobs:
         run: |
           mkdir -p release-assets
           find artifacts/package-* -name "*.tar.gz" -exec cp {} release-assets/ \;
-          cp artifacts/sbom/sbom.json release-assets/radarpub-${{ needs.prepare-release.outputs.version }}-sbom.json
+          cp artifacts/sbom/sbom-rust.json release-assets/radarpub-${{ needs.prepare-release.outputs.version }}-sbom.json
           ls -lh release-assets/
 
       - name: Create GitHub Release
