@@ -100,29 +100,29 @@ ip -details link show can0
 
 ```bash
 # Basic usage with CAN interface
-./target/release/radarpub --can can0
+./target/release/edgefirst-radarpub --can can0
 
 # Enable clustering
-./target/release/radarpub --can can0 --clustering
+./target/release/edgefirst-radarpub --can can0 --clustering
 
 # Specify custom topic prefix
-./target/release/radarpub --can can0 --prefix rt/radar
+./target/release/edgefirst-radarpub --can can0 --prefix rt/radar
 
 # Connect to specific Zenoh router
-./target/release/radarpub --can can0 --connect tcp/192.168.1.1:7447
+./target/release/edgefirst-radarpub --can can0 --connect tcp/192.168.1.1:7447
 ```
 
 ### Running the Publisher (Ethernet Mode)
 
 ```bash
 # Connect to radar via Ethernet
-./target/release/radarpub --eth 192.168.10.10
+./target/release/edgefirst-radarpub --eth 192.168.10.10
 
 # With custom port (default is 55555)
-./target/release/radarpub --eth 192.168.10.10 --eth-port 55555
+./target/release/edgefirst-radarpub --eth 192.168.10.10 --eth-port 55555
 
 # Enable radar cube streaming
-./target/release/radarpub --eth 192.168.10.10 --radar-cube
+./target/release/edgefirst-radarpub --eth 192.168.10.10 --radar-cube
 ```
 
 ### Using drvegrdctl Utility
@@ -182,7 +182,7 @@ INFO radarpub: Radar initialized successfully
 candump can0 | head -20
 
 # Run publisher and check for target output
-timeout 30 ./target/release/radarpub --can can0
+timeout 30 ./target/release/edgefirst-radarpub --can can0
 ```
 
 #### 2. Ethernet Connectivity Test
@@ -192,7 +192,7 @@ timeout 30 ./target/release/radarpub --can can0
 ping 192.168.10.10
 
 # Run publisher with Ethernet backend
-timeout 30 ./target/release/radarpub --eth 192.168.10.10
+timeout 30 ./target/release/edgefirst-radarpub --eth 192.168.10.10
 ```
 
 #### 3. Target Detection Test
@@ -200,7 +200,7 @@ timeout 30 ./target/release/radarpub --eth 192.168.10.10
 ```bash
 # Position a reflective object in front of radar
 # Run with clustering disabled to see raw targets
-./target/release/radarpub --can can0
+./target/release/edgefirst-radarpub --can can0
 
 # Verify targets appear in Zenoh
 z_sub -k "rt/radar/targets"
@@ -210,7 +210,7 @@ z_sub -k "rt/radar/targets"
 
 ```bash
 # Test with clustering enabled
-./target/release/radarpub --can can0 --clustering
+./target/release/edgefirst-radarpub --can can0 --clustering
 
 # Subscribe to cluster output
 z_sub -k "rt/radar/clusters"
@@ -220,7 +220,7 @@ z_sub -k "rt/radar/clusters"
 
 ```bash
 # Enable radar cube (range-Doppler data)
-./target/release/radarpub --eth 192.168.10.10 --radar-cube
+./target/release/edgefirst-radarpub --eth 192.168.10.10 --radar-cube
 
 # Subscribe to radar cube messages
 z_sub -k "rt/radar/cube"
@@ -278,7 +278,7 @@ z_sub -k "rt/radar/cube"
 2. **Reduce processing load:**
    ```bash
    # Disable clustering if not needed
-   ./target/release/radarpub --can can0
+   ./target/release/edgefirst-radarpub --can can0
    # Don't use --clustering flag
    ```
 
@@ -291,7 +291,7 @@ z_sub -k "rt/radar/cube"
 
 2. **Disable multicast if network doesn't support it:**
    ```bash
-   ./target/release/radarpub --can can0 --no-multicast-scouting --connect tcp/<router>:7447
+   ./target/release/edgefirst-radarpub --can can0 --no-multicast-scouting --connect tcp/<router>:7447
    ```
 
 ## Unit Tests

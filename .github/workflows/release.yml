@@ -1,22 +1,43 @@
 # GitHub Actions workflow for publishing releases
 #
-# Based on Au-Zone SPS templates (v2.0)
-# Customized for RadarPub Rust project
+# This workflow orchestrates release publishing when a version tag is pushed:
+# - Waits for build.yml and sbom.yml workflows to complete
+# - Downloads build artifacts from the commit's workflow runs
+# - Creates GitHub Release with binaries and SBOM
+#
+# Release Process:
+# 1. Update version in Cargo.toml
+# 2. Update CHANGELOG.md with version entry
+# 3. Commit and push changes (triggers build.yml and sbom.yml)
+# 4. Create and push tag: git tag v1.6.2 && git push --tags
+#    (release.yml waits for build.yml and sbom.yml to complete)
+#
+# Action Versions (verified January 2026):
+# - actions/checkout@v4
+# - lewagon/wait-on-check-action@v1.3.4
+# - dawidd6/action-download-artifact@v6
+# - softprops/action-gh-release@v2
 
 name: Release
 
 on:
   push:
-    tags: ['v*']
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+
+permissions:
+  contents: write
+  checks: read
 
 jobs:
   prepare-release:
-    name: Prepare Release Information
+    name: Prepare Release
     runs-on: ubuntu-22.04
     outputs:
       version: ${{ steps.version.outputs.version }}
       changelog: ${{ steps.changelog.outputs.changelog }}
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -34,95 +55,161 @@ jobs:
         id: changelog
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
-          CHANGELOG=$(awk -v ver="$VERSION" '
-            /^## \['"$VERSION"'\]/ { found=1; next }
-            found && /^## \[/ { exit }
-            found { print }
-          ' CHANGELOG.md)
-          
+
+          # Extract changelog section for this version
+          if [ -f CHANGELOG.md ]; then
+            CHANGELOG=$(awk -v ver="$VERSION" '
+              /^## \['"$VERSION"'\]/ { found=1; next }
+              found && /^## \[/ { exit }
+              found { print }
+            ' CHANGELOG.md)
+          fi
+
           if [ -z "$CHANGELOG" ]; then
             echo "WARNING: No changelog entry found for version $VERSION"
-            CHANGELOG="See [CHANGELOG.md](CHANGELOG.md) for details."
+            CHANGELOG="See commit history for details."
           fi
-          
+
           echo "changelog<<EOF" >> $GITHUB_OUTPUT
           echo "$CHANGELOG" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-  run-tests:
-    name: Run Tests
+  wait-for-ci:
+    name: Wait for CI Workflows
     needs: prepare-release
-    uses: ./.github/workflows/test.yml
-
-  build-artifacts:
-    name: Build Release Artifacts
-    needs: prepare-release
-    uses: ./.github/workflows/build.yml
-
-  build-sbom:
-    name: Generate SBOM
-    needs: prepare-release
-    uses: ./.github/workflows/sbom.yml
-
-  publish-github-release:
-    name: Publish GitHub Release
     runs-on: ubuntu-22.04
-    needs: [prepare-release, run-tests, build-artifacts, build-sbom]
+    steps:
+      - name: Wait for Build workflow (x86_64)
+        uses: lewagon/wait-on-check-action@v1.3.4
+        with:
+          ref: ${{ github.sha }}
+          check-name: 'Build (x86_64)'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10
+
+      - name: Wait for Build workflow (aarch64)
+        uses: lewagon/wait-on-check-action@v1.3.4
+        with:
+          ref: ${{ github.sha }}
+          check-name: 'Build (aarch64)'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10
+
+      - name: Wait for SBOM workflow
+        uses: lewagon/wait-on-check-action@v1.3.4
+        with:
+          ref: ${{ github.sha }}
+          check-name: 'SBOM Generation and Validation'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10
+
+  create-github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-22.04
+    needs:
+      - prepare-release
+      - wait-for-ci
     permissions:
       contents: write
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - name: Download build artifacts from commit
+        uses: dawidd6/action-download-artifact@v6
         with:
-          path: ./artifacts
+          workflow: build.yml
+          commit: ${{ github.sha }}
+          path: artifacts
 
-      - name: Prepare release assets
+      - name: Download SBOM artifact from commit
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: sbom.yml
+          commit: ${{ github.sha }}
+          path: artifacts
+
+      - name: Organize release assets
         run: |
           mkdir -p release-assets
-          find artifacts/package-* -name "*.tar.gz" -exec cp {} release-assets/ \;
-          cp artifacts/sbom/sbom-rust.json release-assets/radarpub-${{ needs.prepare-release.outputs.version }}-sbom.json
+          VERSION=${{ needs.prepare-release.outputs.version }}
+
+          # Copy x86_64 binaries
+          if [ -f artifacts/packages-x86_64/edgefirst-radarpub-x86_64 ]; then
+            cp artifacts/packages-x86_64/edgefirst-radarpub-x86_64 \
+               release-assets/edgefirst-radarpub-linux-x86_64
+          fi
+          if [ -f artifacts/packages-x86_64/drvegrdctl-x86_64 ]; then
+            cp artifacts/packages-x86_64/drvegrdctl-x86_64 \
+               release-assets/drvegrdctl-linux-x86_64
+          fi
+
+          # Copy ARM64 binaries
+          if [ -f artifacts/packages-aarch64/edgefirst-radarpub-aarch64 ]; then
+            cp artifacts/packages-aarch64/edgefirst-radarpub-aarch64 \
+               release-assets/edgefirst-radarpub-linux-aarch64
+          fi
+          if [ -f artifacts/packages-aarch64/drvegrdctl-aarch64 ]; then
+            cp artifacts/packages-aarch64/drvegrdctl-aarch64 \
+               release-assets/drvegrdctl-linux-aarch64
+          fi
+
+          # Copy SBOM (filename is sbom-rust.json from cargo-cyclonedx)
+          if [ -f artifacts/sbom/sbom-rust.json ]; then
+            cp artifacts/sbom/sbom-rust.json \
+               release-assets/edgefirst-radarpub-v${VERSION}-sbom.json
+          fi
+
+          echo "Release assets prepared:"
           ls -lh release-assets/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: RadarPub v${{ needs.prepare-release.outputs.version }}
+          name: EdgeFirst Radar Publisher v${{ needs.prepare-release.outputs.version }}
           body: |
-            ## RadarPub v${{ needs.prepare-release.outputs.version }}
-            
-            ${{ needs.prepare-release.outputs.changelog }}
-            
-            ---
-            
-            ### Installation
-            
-            Download the appropriate package for your platform:
-            - `radarpub-*-x86_64-linux.tar.gz` - Linux x86_64
-            - `radarpub-*-aarch64-linux.tar.gz` - Linux ARM64 (Maivin/Raivin)
-            
-            Extract and install:
+            # EdgeFirst Radar Publisher v${{ needs.prepare-release.outputs.version }}
+
+            ## Installation
+
+            ### Download Binaries
+
+            | Platform | edgefirst-radarpub | drvegrdctl |
+            |----------|-------------------|------------|
+            | Linux x86_64 | `edgefirst-radarpub-linux-x86_64` | `drvegrdctl-linux-x86_64` |
+            | Linux ARM64 | `edgefirst-radarpub-linux-aarch64` | `drvegrdctl-linux-aarch64` |
+
             ```bash
-            tar -xzf radarpub-*.tar.gz
-            cd radarpub-*/
-            sudo cp bin/* /usr/local/bin/
+            # Download and install (ARM64 example for Maivin/Raivin)
+            wget https://github.com/EdgeFirstAI/radarpub/releases/download/v${{ needs.prepare-release.outputs.version }}/edgefirst-radarpub-linux-aarch64
+            wget https://github.com/EdgeFirstAI/radarpub/releases/download/v${{ needs.prepare-release.outputs.version }}/drvegrdctl-linux-aarch64
+            chmod +x edgefirst-radarpub-linux-aarch64 drvegrdctl-linux-aarch64
+            sudo mv edgefirst-radarpub-linux-aarch64 /usr/local/bin/edgefirst-radarpub
+            sudo mv drvegrdctl-linux-aarch64 /usr/local/bin/drvegrdctl
             ```
-            
-            ### Documentation
-            
-            - [README](https://github.com/EdgeFirstAI/radarpub/blob/main/README.md)
-            - [Architecture](https://github.com/EdgeFirstAI/radarpub/blob/main/ARCHITECTURE.md)
-            - [Contributing](https://github.com/EdgeFirstAI/radarpub/blob/main/CONTRIBUTING.md)
-            
-            ### SBOM & License
-            
-            Software Bill of Materials: `radarpub-${{ needs.prepare-release.outputs.version }}-sbom.json`
-            
-            License: Apache-2.0
-          files: release-assets/*
+
+            ## What's Changed
+
+            ${{ needs.prepare-release.outputs.changelog }}
+
+            ---
+
+            **Full Documentation**: https://github.com/EdgeFirstAI/radarpub#readme
+          files: |
+            release-assets/*
           draft: false
-          prerelease: false
-          fail_on_unmatched_files: true
+          prerelease: ${{ contains(needs.prepare-release.outputs.version, '-') }}
+          fail_on_unmatched_files: false
+
+      - name: Summary
+        run: |
+          echo "## Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ needs.prepare-release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          ls -lh release-assets/ >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

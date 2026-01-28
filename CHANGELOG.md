@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.2] - 2025-01-28
+
+### Changed
+
+- **Binary renamed**: `radarpub` → `edgefirst-radarpub` for consistency with EdgeFirst naming convention
+- **Release artifact format**: Changed from `.tar.gz` archives to raw binaries
+  - Binaries now published as `edgefirst-radarpub-linux-x86_64`, `edgefirst-radarpub-linux-aarch64`, etc.
+  - Matches the format used by lidarpub and edgefirst-imu
+- **CI/CD improvements**:
+  - Simplified build workflow to match lidarpub patterns
+  - Uses `lewagon/wait-on-check-action` for release coordination
+  - Uses `dawidd6/action-download-artifact` for cross-workflow artifact downloads
+
 ## [1.6.1] - 2025-01-28
 
 ### Changed
@@ -121,7 +134,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CAN DRVEGRD messages now always treated as little endian
 - Clippy warnings resolved
 
-[Unreleased]: https://github.com/EdgeFirstAI/radarpub/compare/v1.6.1...HEAD
+[Unreleased]: https://github.com/EdgeFirstAI/radarpub/compare/v1.6.2...HEAD
+[1.6.2]: https://github.com/EdgeFirstAI/radarpub/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/EdgeFirstAI/radarpub/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/EdgeFirstAI/radarpub/releases/tag/v1.6.0
 [1.5.3]: https://github.com/EdgeFirstAI/radarpub/compare/v1.5.2...v1.5.3

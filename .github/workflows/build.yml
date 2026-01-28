@@ -1,7 +1,14 @@
 # GitHub Actions workflow for building release artifacts
 #
-# Based on Au-Zone SPS templates (v2.0)
-# Customized for RadarPub Rust project
+# This workflow builds binaries for x86_64 and ARM64 platforms.
+# Uses cross-compilation for ARM64 since radarpub uses stable Rust (not nightly).
+#
+# Action Versions (verified January 2026):
+# - actions/checkout@v4
+# - dtolnay/rust-toolchain@stable
+# - taiki-e/install-action@cross
+# - actions/cache@v4
+# - actions/upload-artifact@v4
 
 name: Build
 
@@ -11,46 +18,23 @@ on:
     tags: ['v*']
   pull_request:
     branches: [ main, develop ]
-  workflow_call:  # Allow this workflow to be called by other workflows
+  workflow_call:
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  # Build documentation with rustdoc
-  documentation:
-    name: Build Documentation
-    runs-on: ubuntu-22.04
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build API documentation
-        run: cargo doc --no-deps --all-features --document-private-items
-
-      - name: Create index redirect
-        run: echo '<meta http-equiv="refresh" content="0; url=radarpub">' > target/doc/index.html
-
-      - name: Upload documentation artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: documentation
-          path: target/doc/
-          retention-days: 90
-
-  # Build binary packages for multiple platforms
   build-packages:
-    name: Build Packages (${{ matrix.platform.name }})
+    name: Build (${{ matrix.platform.name }})
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
         platform:
-          - name: x86_64-linux
+          - name: x86_64
             runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             cross: false
-          - name: aarch64-linux
+          - name: aarch64
             runner: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
             cross: true
@@ -70,32 +54,27 @@ jobs:
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          path: ~/.cargo/registry/index
+          key: ${{ runner.os }}-${{ matrix.platform.name }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.platform.name }}-cargo-index-
 
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache target directory
+      - name: Cache cargo build
         uses: actions/cache@v4
         with:
           path: target
-          key: ${{ runner.os }}-${{ matrix.platform.name }}-release-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.platform.name }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.platform.name }}-cargo-build-
 
       - name: Build release binaries (native)
         if: ${{ !matrix.platform.cross }}
         run: |
-          cargo build --release --bin radarpub --features can,zenoh
+          cargo build --release --bin edgefirst-radarpub --features can,zenoh
           cargo build --release --bin drvegrdctl --features can
-          cargo build --release --bin drvegrd-rerun --features rerun || true
 
       - name: Build release binaries (cross)
         if: matrix.platform.cross
         run: |
-          cross build --target ${{ matrix.platform.target }} --release --bin radarpub --features can,zenoh
+          cross build --target ${{ matrix.platform.target }} --release --bin edgefirst-radarpub --features can,zenoh
           cross build --target ${{ matrix.platform.target }} --release --bin drvegrdctl --features can
 
       - name: Strip binaries
@@ -106,46 +85,54 @@ jobs:
             TARGET_DIR="target/release"
           fi
           
-          if [ -f "$TARGET_DIR/radarpub" ]; then
-            strip "$TARGET_DIR/radarpub" || true
-          fi
-          if [ -f "$TARGET_DIR/drvegrdctl" ]; then
-            strip "$TARGET_DIR/drvegrdctl" || true
-          fi
-          if [ -f "$TARGET_DIR/drvegrd-rerun" ]; then
-            strip "$TARGET_DIR/drvegrd-rerun" || true
+          # Strip binaries (use cross strip for aarch64)
+          if [ "${{ matrix.platform.cross }}" = "true" ]; then
+            # Cross builds include strip in the container
+            docker run --rm -v "$(pwd):/project" -w /project \
+              ghcr.io/cross-rs/${{ matrix.platform.target }}:main \
+              aarch64-linux-gnu-strip "$TARGET_DIR/edgefirst-radarpub" "$TARGET_DIR/drvegrdctl" || true
+          else
+            strip "$TARGET_DIR/edgefirst-radarpub" "$TARGET_DIR/drvegrdctl" || true
           fi
 
-      - name: Create distribution package
+      - name: Create package
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          if [ -z "$VERSION" ] || [ "$VERSION" = "$GITHUB_REF" ]; then
-            VERSION="dev-$(git rev-parse --short HEAD)"
-          fi
-          
           if [ "${{ matrix.platform.cross }}" = "true" ]; then
             TARGET_DIR="target/${{ matrix.platform.target }}/release"
           else
             TARGET_DIR="target/release"
           fi
           
-          PACKAGE_DIR="radarpub-$VERSION-${{ matrix.platform.name }}"
-          mkdir -p "$PACKAGE_DIR/bin"
-          
-          # Copy binaries
-          [ -f "$TARGET_DIR/radarpub" ] && cp "$TARGET_DIR/radarpub" "$PACKAGE_DIR/bin/"
-          [ -f "$TARGET_DIR/drvegrdctl" ] && cp "$TARGET_DIR/drvegrdctl" "$PACKAGE_DIR/bin/"
-          [ -f "$TARGET_DIR/drvegrd-rerun" ] && cp "$TARGET_DIR/drvegrd-rerun" "$PACKAGE_DIR/bin/" || true
-          
-          # Copy documentation
-          cp README.md LICENSE NOTICE.md CHANGELOG.md "$PACKAGE_DIR/"
-          
-          # Create tarball
-          tar -czf "$PACKAGE_DIR.tar.gz" "$PACKAGE_DIR"
+          mkdir -p packages
+          cp "$TARGET_DIR/edgefirst-radarpub" packages/edgefirst-radarpub-${{ matrix.platform.name }}
+          cp "$TARGET_DIR/drvegrdctl" packages/drvegrdctl-${{ matrix.platform.name }}
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: package-${{ matrix.platform.name }}
-          path: radarpub-*.tar.gz
+          name: packages-${{ matrix.platform.name }}
+          path: packages/
+          retention-days: 90
+
+  documentation:
+    name: Generate Documentation
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build API documentation
+        run: cargo doc --no-deps --all-features --document-private-items
+
+      - name: Create index redirect
+        run: echo '<meta http-equiv="refresh" content="0; url=radarpub">' > target/doc/index.html
+
+      - name: Upload documentation artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: documentation
+          path: target/doc/
           retention-days: 90
