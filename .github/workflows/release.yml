@@ -161,6 +161,9 @@ jobs:
                release-assets/edgefirst-radarpub-v${VERSION}-sbom.json
           fi
 
+          # Copy default configuration file
+          cp radarpub.default release-assets/radarpub.default
+
           echo "Release assets prepared:"
           ls -lh release-assets/
 
@@ -179,6 +182,7 @@ jobs:
             |----------|-------------------|------------|
             | Linux x86_64 | `edgefirst-radarpub-linux-x86_64` | `drvegrdctl-linux-x86_64` |
             | Linux ARM64 | `edgefirst-radarpub-linux-aarch64` | `drvegrdctl-linux-aarch64` |
+            | Configuration | `radarpub.default` | |
 
             ```bash
             # Download and install (ARM64 example for Maivin/Raivin)
@@ -187,6 +191,9 @@ jobs:
             chmod +x edgefirst-radarpub-linux-aarch64 drvegrdctl-linux-aarch64
             sudo mv edgefirst-radarpub-linux-aarch64 /usr/local/bin/edgefirst-radarpub
             sudo mv drvegrdctl-linux-aarch64 /usr/local/bin/drvegrdctl
+
+            # Install default configuration (optional)
+            sudo cp radarpub.default /etc/default/radarpub
             ```
 
             ## What's Changed

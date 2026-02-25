@@ -183,48 +183,66 @@ impl fmt::Display for DetectionSensitivity {
     }
 }
 
+/// Command-line arguments for EdgeFirst Radar Publisher.
+///
+/// This structure defines all configuration options for the radar node,
+/// including radar parameters, clustering, Zenoh configuration, and
+/// debugging options. Arguments can be specified via command line or
+/// environment variables.
+///
+/// # Example
+///
+/// ```bash
+/// # Via command line
+/// edgefirst-radarpub --center-frequency medium --frequency-sweep short
+///
+/// # Via environment variables
+/// export CENTER_FREQUENCY=medium
+/// export FREQUENCY_SWEEP=short
+/// edgefirst-radarpub
+/// ```
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
     /// The center frequency for the radar.
-    #[arg(long, env, default_value = "medium")]
+    #[arg(long, env = "CENTER_FREQUENCY", default_value = "medium")]
     pub center_frequency: CenterFrequency,
 
     /// The frequency sweep which controls the range of the radar.
-    #[arg(long, env, default_value = "short")]
+    #[arg(long, env = "FREQUENCY_SWEEP", default_value = "short")]
     pub frequency_sweep: FrequencySweep,
 
     /// The range toggle mode allows the radar to alternate between various
     /// frequencies.
-    #[arg(long, env, default_value = "off")]
+    #[arg(long, env = "RANGE_TOGGLE", default_value = "off")]
     pub range_toggle: RangeToggle,
 
     /// The detection sensitivity controls the radar's ability to detect
     /// targets.
-    #[arg(long, env, default_value = "medium")]
+    #[arg(long, env = "DETECTION_SENSITIVITY", default_value = "medium")]
     pub detection_sensitivity: DetectionSensitivity,
 
     /// Enable streaming the low-level radar data cube on the cube_topic.
-    #[arg(long, env, default_value = "false")]
+    #[arg(long, env = "CUBE", default_value = "false")]
     pub cube: bool,
 
     /// Enable radar target clustering task.
-    #[arg(long, env, default_value = "false")]
+    #[arg(long, env = "CLUSTERING", default_value = "false")]
     pub clustering: bool,
 
     /// Clustering window size in frames (one frame is 55ms).
-    #[arg(long, env, default_value = "6")]
+    #[arg(long, env = "WINDOW_SIZE", default_value = "6")]
     pub window_size: usize,
 
     /// Clustering DBSCAN distance limit (euclidean distance)
-    #[arg(long, env, default_value = "1")]
+    #[arg(long, env = "CLUSTERING_EPS", default_value = "1")]
     pub clustering_eps: f64,
 
     /// Clustering DBSCAN parameter scaling. Parameter order is x, y, z, speed.
     /// Set the appropriate axis to 0 to ignore that axis
     #[arg(
         long,
-        env,
+        env = "CLUSTERING_PARAM_SCALE",
         default_value = "1 1 0 0",
         value_delimiter = ' ',
         num_args = 4
@@ -232,79 +250,79 @@ pub struct Args {
     pub clustering_param_scale: Vec<f32>,
 
     /// Clustering DBSCAN point limit. Minimum 3
-    #[arg(long, env, default_value = "5")]
+    #[arg(long, env = "CLUSTERING_POINT_LIMIT", default_value = "5")]
     pub clustering_point_limit: usize,
 
-    /// mirror the radar data
-    #[arg(long, env)]
+    /// Mirror the radar data
+    #[arg(long, env = "MIRROR")]
     pub mirror: bool,
 
-    /// can device connected to radar
+    /// CAN device connected to radar
     #[arg(long, default_value = "can0")]
     pub can: String,
 
-    /// radar frame transform vector from base_link
+    /// Radar frame transform vector from base_link (x y z in meters)
     #[arg(
         long,
-        env,
+        env = "RADAR_TF_VEC",
         default_value = "0 0 0",
         value_delimiter = ' ',
         num_args = 3
     )]
     pub radar_tf_vec: Vec<f64>,
 
-    /// radar frame transform quaternion from base_link
+    /// Radar frame transform quaternion from base_link (x y z w)
     #[arg(
         long,
-        env,
+        env = "RADAR_TF_QUAT",
         default_value = "0 0 0 1",
         value_delimiter = ' ',
         num_args = 4
     )]
     pub radar_tf_quat: Vec<f64>,
 
-    /// The name of the base frame
-    #[arg(long, env, default_value = "base_link")]
+    /// TF frame ID for robot base
+    #[arg(long, env = "BASE_FRAME_ID", default_value = "base_link")]
     pub base_frame_id: String,
 
-    /// The name of the radar frame
-    #[arg(long, env, default_value = "radar")]
+    /// TF frame ID for radar frame
+    #[arg(long, env = "RADAR_FRAME_ID", default_value = "radar")]
     pub radar_frame_id: String,
 
-    /// radar targets topic name
+    /// Radar targets topic name
     #[arg(long, default_value = "rt/radar/targets")]
     pub targets_topic: String,
 
-    /// radar clusters topic name
+    /// Radar clusters topic name
     #[arg(long, default_value = "rt/radar/clusters")]
     pub clusters_topic: String,
 
-    /// radar data cube topic name
+    /// Radar data cube topic name
     #[arg(long, default_value = "rt/radar/cube")]
     pub cube_topic: String,
 
     /// Application log level
-    #[arg(long, env, default_value = "info")]
+    #[arg(long, env = "RUST_LOG", default_value = "info")]
     pub rust_log: LevelFilter,
 
     /// Enable Tracy profiler broadcast
-    #[arg(long, env)]
+    #[arg(long, env = "TRACY")]
     pub tracy: bool,
 
-    /// zenoh connection mode
-    #[arg(long, env, default_value = "peer")]
+    /// Zenoh participant mode (peer, client, or router)
+    #[arg(long, env = "MODE", default_value = "peer")]
     mode: WhatAmI,
 
-    /// connect to zenoh endpoints
-    #[arg(long, env)]
+    /// Zenoh endpoints to connect to (can specify multiple)
+    #[arg(long, env = "CONNECT")]
     connect: Vec<String>,
 
-    /// listen to zenoh endpoints
-    #[arg(long, env)]
+    /// Zenoh endpoints to listen on (can specify multiple)
+    #[arg(long, env = "LISTEN")]
     listen: Vec<String>,
 
-    /// disable zenoh multicast scouting
-    #[arg(long, env)]
+    /// Disable Zenoh multicast peer discovery
+    #[arg(long, env = "NO_MULTICAST_SCOUTING")]
     no_multicast_scouting: bool,
 }
 
