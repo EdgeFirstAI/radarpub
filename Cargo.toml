@@ -3,7 +3,7 @@ name = "radarpub"
 description = "EdgeFirst Radar Node - Smart Micro DRVEGRD radar publisher for ROS2/Zenoh"
 repository = "https://github.com/EdgeFirstAI/radarpub"
 license = "Apache-2.0"
-version = "1.6.2"
+version = "1.6.3"
 edition = "2021"
 
 [profile.release]

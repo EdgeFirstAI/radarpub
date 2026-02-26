@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-02-26
+
+### Added
+
+- `radarpub.default`: Complete systemd EnvironmentFile with all configuration options and documentation, included as a release artifact
+
+### Changed
+
+- **Environment variable names**: Use short uppercase names (e.g. `CENTER_FREQUENCY` instead of `EDGEFIRST_RADARPUB_CENTER_FREQUENCY`) for easier systemd EnvironmentFile configuration
+- Improved argument help text with consistent capitalization and clearer descriptions
+
+### Fixed
+
+- SBOM workflow: Pin CycloneDX CLI to v0.30.0 to prevent SHA256 checksum mismatch when new versions are released
+
 ## [1.6.2] - 2025-01-28
 
 ### Changed
@@ -134,7 +149,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CAN DRVEGRD messages now always treated as little endian
 - Clippy warnings resolved
 
-[Unreleased]: https://github.com/EdgeFirstAI/radarpub/compare/v1.6.2...HEAD
+[Unreleased]: https://github.com/EdgeFirstAI/radarpub/compare/v1.6.3...HEAD
+[1.6.3]: https://github.com/EdgeFirstAI/radarpub/compare/v1.6.2...v1.6.3
 [1.6.2]: https://github.com/EdgeFirstAI/radarpub/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/EdgeFirstAI/radarpub/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/EdgeFirstAI/radarpub/releases/tag/v1.6.0
