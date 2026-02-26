@@ -18,7 +18,7 @@
 # frequency band. Note: ultra-short range is only supported with the low
 # center frequency.
 # Accepted values: low, medium, high
-CENTER_FREQUENCY="low"
+CENTER_FREQUENCY="medium"
 
 # ---------------------------------------------------------------------------
 # Frequency Sweep (Range)
@@ -27,7 +27,7 @@ CENTER_FREQUENCY="low"
 # sweeps detect targets at greater distances but with lower resolution.
 # Note: ultra-short range is only supported with the low center frequency.
 # Accepted values: long, medium, short, ultra-short
-FREQUENCY_SWEEP="ultra-short"
+FREQUENCY_SWEEP="short"
 
 # ---------------------------------------------------------------------------
 # Range Toggle
@@ -45,7 +45,7 @@ RANGE_TOGGLE="off"
 # Controls the radar's ability to detect targets. Higher sensitivity
 # detects weaker returns but may increase false positives.
 # Accepted values: low, medium, high
-DETECTION_SENSITIVITY="high"
+DETECTION_SENSITIVITY="medium"
 
 # ---------------------------------------------------------------------------
 # Data Cube Streaming
