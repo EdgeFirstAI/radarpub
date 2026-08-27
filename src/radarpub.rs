@@ -12,9 +12,10 @@ use args::{Args, CenterFrequency, DetectionSensitivity, FrequencySweep, RangeTog
 use can::{read_message, read_status, write_parameter, Parameter, Status, Target};
 use clap::Parser;
 use clustering::Clustering;
+use common::TimestampError;
 use core::f64;
 use edgefirst_schemas::{
-    builtin_interfaces::{self, Time},
+    builtin_interfaces::Time,
     edgefirst_msgs::{self, RadarInfo},
     geometry_msgs::{Quaternion, Transform, TransformStamped, Vector3},
     sensor_msgs, serde_cdr,
@@ -130,7 +131,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tf_msg = TransformStamped {
         header: Header {
             frame_id: args.base_frame_id.clone(),
-            stamp: timestamp().unwrap_or(Time { sec: 0, nanosec: 0 }),
+            stamp: get_stamp().unwrap_or_else(|| {
+                warn!("tf_static: system clock unavailable, using epoch-zero timestamp");
+                Time { sec: 0, nanosec: 0 }
+            }),
         },
         child_frame_id: args.radar_frame_id.clone(),
         transform: Transform {
@@ -155,7 +159,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let info_msg = RadarInfo {
         header: Header {
             frame_id: args.base_frame_id.clone(),
-            stamp: timestamp().unwrap_or(Time { sec: 0, nanosec: 0 }),
+            stamp: get_stamp().unwrap_or_else(|| {
+                warn!("radar_info: system clock unavailable, using epoch-zero timestamp");
+                Time { sec: 0, nanosec: 0 }
+            }),
         },
         center_frequency: args.center_frequency.to_string(),
         frequency_sweep: args.frequency_sweep.to_string(),
@@ -326,7 +333,7 @@ fn format_targets(
 
     let msg = sensor_msgs::PointCloud2 {
         header: std_msgs::Header {
-            stamp: timestamp()?,
+            stamp: get_stamp().ok_or("wall-clock timestamp unavailable")?,
             frame_id: frame_id.to_string(),
         },
         height: 1,
@@ -366,7 +373,9 @@ async fn clustering_task(
 
     loop {
         let targets: Vec<Target> = rx.recv().await.unwrap();
-        let time = timestamp()?;
+        let Some(time) = get_stamp() else {
+            continue;
+        };
 
         let (targets, clusters) = info_span!("clustering").in_scope(|| {
             if window.len() == args.window_size {
@@ -640,9 +649,18 @@ fn format_cube(
         unsafe { Vec::from_raw_parts(data.as_ptr() as *mut i16, data.len() * 2, data.len() * 2) };
     std::mem::forget(data);
 
+    let stamp = if cubemsg.timestamp > 0 {
+        common::stamp_from_micros(cubemsg.timestamp)
+    } else {
+        get_stamp().unwrap_or_else(|| {
+            warn!("RadarCube: no sensor timestamp and wall-clock unavailable, using epoch-zero");
+            Time { sec: 0, nanosec: 0 }
+        })
+    };
+
     let msg = edgefirst_msgs::RadarCube {
         header: std_msgs::Header {
-            stamp: timestamp()?,
+            stamp,
             frame_id: frame_id.to_string(),
         },
         timestamp: cubemsg.timestamp,
@@ -711,18 +729,19 @@ async fn radar_info(
     }
 }
 
-fn timestamp() -> Result<builtin_interfaces::Time, std::io::Error> {
-    let mut tp = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    let err = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC_RAW, &mut tp) };
-    if err != 0 {
-        return Err(std::io::Error::last_os_error());
+fn get_stamp() -> Option<Time> {
+    match common::timestamp() {
+        Ok(ns) => Some(Time::from_nanos(ns)),
+        Err(TimestampError::TimestampOverflow) => {
+            warn!("Timestamp overflow: system clock exceeds i32 range (Y2038), saturating");
+            Some(Time {
+                sec: i32::MAX,
+                nanosec: 999_999_999,
+            })
+        }
+        Err(e) => {
+            warn!("Failed to get timestamp: {}", e);
+            None
+        }
     }
-
-    Ok(builtin_interfaces::Time {
-        sec: tp.tv_sec as i32,
-        nanosec: tp.tv_nsec as u32,
-    })
 }
