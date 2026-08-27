@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Use wall-clock time (`CLOCK_REALTIME`) for all ROS 2 Header timestamps instead
+  of `CLOCK_MONOTONIC_RAW`, enabling temporal synchronization across EdgeFirst
+  services (fusion, webui, rosbag correlation) (EDGEAI-1397, EDGEAI-1131)
+- Add Y2038 overflow guard for `builtin_interfaces::Time` (sec is `i32`)
+- Derive RadarCube `header.stamp` from sensor capture time (Unix μs) when available
+
 ## [1.6.3] - 2026-02-26
 
 ### Added

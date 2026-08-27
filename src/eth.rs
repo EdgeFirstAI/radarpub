@@ -984,8 +984,10 @@ impl RadarCubeReader {
         let cube: Vec<u32> = transport
             .cube_header()?
             .payload()
-            .chunks_exact(4)
-            .map(|chunk| u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|&chunk| u32::from_be_bytes(chunk))
             .collect();
         let cube =
             unsafe { std::slice::from_raw_parts(cube.as_ptr() as *const Complex<i16>, cube.len()) };
@@ -1116,8 +1118,10 @@ impl RadarCubeReader {
             let cube: Vec<u32> = transport
                 .debug_header()?
                 .payload()
-                .chunks_exact(4)
-                .map(|chunk| u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|&chunk| u32::from_be_bytes(chunk))
                 .collect();
             let cube = unsafe {
                 std::slice::from_raw_parts(cube.as_ptr() as *const Complex<i16>, cube.len())
