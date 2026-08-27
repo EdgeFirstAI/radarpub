@@ -59,11 +59,19 @@ pub fn timestamp() -> Result<u64, TimestampError> {
 }
 
 /// Converts a Unix timestamp in microseconds to `builtin_interfaces::Time`.
-pub fn stamp_from_micros(us: u64) -> Time {
-    Time {
-        sec: (us / 1_000_000) as i32,
-        nanosec: ((us % 1_000_000) * 1_000) as u32,
+///
+/// Returns [`TimestampError::TimestampOverflow`] if seconds exceed the `i32`
+/// range used by ROS 2 `Time` (Y2038).
+pub fn stamp_from_micros(us: u64) -> Result<Time, TimestampError> {
+    let secs = us / 1_000_000;
+    if secs > i32::MAX as u64 {
+        return Err(TimestampError::TimestampOverflow);
     }
+
+    Ok(Time {
+        sec: secs as i32,
+        nanosec: ((us % 1_000_000) * 1_000) as u32,
+    })
 }
 
 /// Set real-time FIFO scheduler priority for current thread.
@@ -159,8 +167,17 @@ mod tests {
 
     #[test]
     fn test_stamp_from_micros() {
-        let stamp = stamp_from_micros(1_700_000_000_123_456);
+        let stamp = stamp_from_micros(1_700_000_000_123_456).unwrap();
         assert_eq!(stamp.sec, 1_700_000_000);
         assert_eq!(stamp.nanosec, 123_456_000);
+    }
+
+    #[test]
+    fn test_stamp_from_micros_overflow() {
+        let us = (i32::MAX as u64 + 1) * 1_000_000;
+        assert!(matches!(
+            stamp_from_micros(us),
+            Err(TimestampError::TimestampOverflow)
+        ));
     }
 }

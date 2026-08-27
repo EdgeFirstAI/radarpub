@@ -333,7 +333,10 @@ fn format_targets(
 
     let msg = sensor_msgs::PointCloud2 {
         header: std_msgs::Header {
-            stamp: get_stamp().ok_or("wall-clock timestamp unavailable")?,
+            stamp: get_stamp().unwrap_or_else(|| {
+                warn!("targets: system clock unavailable, using epoch-zero timestamp");
+                Time { sec: 0, nanosec: 0 }
+            }),
             frame_id: frame_id.to_string(),
         },
         height: 1,
@@ -650,7 +653,16 @@ fn format_cube(
     std::mem::forget(data);
 
     let stamp = if cubemsg.timestamp > 0 {
-        common::stamp_from_micros(cubemsg.timestamp)
+        match common::stamp_from_micros(cubemsg.timestamp) {
+            Ok(stamp) => stamp,
+            Err(_) => {
+                warn!("RadarCube: sensor timestamp exceeds i32 range (Y2038), saturating");
+                Time {
+                    sec: i32::MAX,
+                    nanosec: 999_999_999,
+                }
+            }
+        }
     } else {
         get_stamp().unwrap_or_else(|| {
             warn!("RadarCube: no sensor timestamp and wall-clock unavailable, using epoch-zero");
