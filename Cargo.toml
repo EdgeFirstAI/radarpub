@@ -54,50 +54,50 @@ profiling = [
 ]
 
 [dependencies]
-clap = { version = "4.5.52", features = ["derive", "env"] }
+clap = { version = "4.6.6", features = ["derive", "env"] }
 crc16 = "0.4.0"
 dbscan = "0.3.1"
-edgefirst-schemas = "1.5.2"
-env_logger = "0.11.7"
-etherparse = { version = "0.18.0", optional = true }
+edgefirst-schemas = "4.0.0"
+env_logger = "0.11.11"
+etherparse = { version = "0.21.0", optional = true }
 kanal = { git = "https://github.com/fereidani/kanal", rev = "b6aeab2" }
-lapjv = "0.2.1"
-libc = "0.2.172"
-log = "0.4.27"
-nalgebra = "0.33.2"
-ndarray = "0.16.1"
-ndarray-npy = { version = "0.9.1", optional = true }
-num = "0.4.1"
+lapjv = "0.3.0"
+libc = "0.2.180"
+log = "0.4.34"
+nalgebra = "0.35.0"
+ndarray = "0.17.2"
+ndarray-npy = { version = "0.10.0", optional = true }
+num = "0.4.3"
 pcarp = { version = "2.0.0", optional = true }
-rerun = { version = "0.27.2", optional = true, features = ["clap"] }
-serde_json = "1.0.145"
-socketcan = { version = "3.5.0", features = ["tokio"], optional = true }
-tokio = { version = "1.45.0", features = [
+rerun = { version = "0.36.3", optional = true, features = ["clap"] }
+serde_json = "1.0.151"
+socketcan = { version = "3.6.2", features = ["tokio"], optional = true }
+tokio = { version = "1.53.1", features = [
     "rt-multi-thread",
     "net",
     "time",
     "io-std",
     "tracing",
 ] }
-tracing = "0.1.41"
-tracing-journald = "0.3.1"
+tracing = "0.1.44"
+tracing-journald = "0.3.2"
 tracing-log = "0.2.0"
-tracing-subscriber = "0.3.20"
-tracing-tracy = { version = "0.11.4", default-features = false, features = [
+tracing-subscriber = "0.3.23"
+tracing-tracy = { version = "0.12.0", default-features = false, features = [
     "manual-lifetime",
     "broadcast",
     "ondemand",
     "fibers",
 ] }
-tracy-client = { version = "0.18.3", default-features = false, features = [
+tracy-client = { version = "0.19.0", default-features = false, features = [
     "manual-lifetime",
     "broadcast",
     "ondemand",
     "fibers",
 ] }
-uuid = { version = "1.18.1", features = ["v4"] }
-zenoh = { version = "1.6.2", optional = true }
+uuid = { version = "1.26.0", features = ["v4"] }
+zenoh = { version = "1.10.0", optional = true }
 
 [dev-dependencies]
-etherparse = { version = "0.18.0" }
+etherparse = { version = "0.21.0" }
 pcarp = { version = "2.0.0" }

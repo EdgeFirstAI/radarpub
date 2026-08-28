@@ -236,7 +236,7 @@ async fn udp_loop(
                     let cube = format_cube(&cubemsg, numpy)?;
 
                     if let Some(rr) = rr {
-                        let tensor = rerun::Tensor::try_from(cube)?;
+                        let tensor = tensor_from_i16_array(&cube);
                         rr.log("cube", &tensor)?;
 
                         rr.log(
@@ -306,7 +306,7 @@ fn pcap_loop(
 
                                 if let Some(rr) = rr {
                                     rr.set_time_secs("stable_time", time as f64);
-                                    let tensor = rerun::Tensor::try_from(cube)?;
+                                    let tensor = tensor_from_i16_array(&cube);
                                     rr.log("cube", &tensor)?;
                                 }
                             }
@@ -386,6 +386,19 @@ fn transform_xyz(range: f32, azimuth: f32, elevation: f32, mirror: bool) -> [f32
     } else {
         [x, y, z]
     }
+}
+
+fn tensor_from_i16_array<S, D>(array: &ndarray::ArrayBase<S, D>) -> rerun::Tensor
+where
+    S: ndarray::Data<Elem = i16>,
+    D: ndarray::Dimension,
+{
+    let shape: Vec<u64> = array.shape().iter().map(|&d| d as u64).collect();
+    let values: Vec<i16> = array.iter().copied().collect();
+    rerun::Tensor::new(rerun::TensorData::new(
+        shape,
+        rerun::TensorBuffer::I16(values.into()),
+    ))
 }
 
 #[cfg(feature = "can")]

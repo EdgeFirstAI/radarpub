@@ -18,8 +18,7 @@ use edgefirst_schemas::{
     builtin_interfaces::Time,
     edgefirst_msgs::{self, RadarInfo},
     geometry_msgs::{Quaternion, Transform, TransformStamped, Vector3},
-    sensor_msgs, serde_cdr,
-    std_msgs::{self, Header},
+    sensor_msgs::{PointCloud2, PointFieldView},
 };
 use eth::{RadarCube, RadarCubeReader, SMS_PACKET_SIZE};
 use kanal::{AsyncReceiver, AsyncSender};
@@ -128,16 +127,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let tf_session = session.clone();
-    let tf_msg = TransformStamped {
-        header: Header {
-            frame_id: args.base_frame_id.clone(),
-            stamp: get_stamp().unwrap_or_else(|| {
-                warn!("tf_static: system clock unavailable, using epoch-zero timestamp");
-                Time { sec: 0, nanosec: 0 }
-            }),
-        },
-        child_frame_id: args.radar_frame_id.clone(),
-        transform: Transform {
+    let tf_stamp = get_stamp().unwrap_or_else(|| {
+        warn!("tf_static: system clock unavailable, using epoch-zero timestamp");
+        Time { sec: 0, nanosec: 0 }
+    });
+    let tf_msg = TransformStamped::builder()
+        .stamp(tf_stamp)
+        .frame_id(args.base_frame_id.clone())
+        .child_frame_id(args.radar_frame_id.clone())
+        .transform(Transform {
             translation: Vector3 {
                 x: args.radar_tf_vec[0],
                 y: args.radar_tf_vec[1],
@@ -149,30 +147,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 z: args.radar_tf_quat[2],
                 w: args.radar_tf_quat[3],
             },
-        },
-    };
-    let tf_msg = ZBytes::from(serde_cdr::serialize(&tf_msg).unwrap());
+        })
+        .build()
+        .unwrap();
+    let tf_msg = ZBytes::from(tf_msg.into_cdr());
     let tf_enc = Encoding::APPLICATION_CDR.with_schema("geometry_msgs/msg/TransformStamped");
     let tf_task = tokio::spawn(async move { tf_static(tf_session, tf_msg, tf_enc).await.unwrap() });
     std::mem::drop(tf_task);
 
-    let info_msg = RadarInfo {
-        header: Header {
-            frame_id: args.base_frame_id.clone(),
-            stamp: get_stamp().unwrap_or_else(|| {
-                warn!("radar_info: system clock unavailable, using epoch-zero timestamp");
-                Time { sec: 0, nanosec: 0 }
-            }),
-        },
-        center_frequency: args.center_frequency.to_string(),
-        frequency_sweep: args.frequency_sweep.to_string(),
-        range_toggle: args.range_toggle.to_string(),
-        detection_sensitivity: args.detection_sensitivity.to_string(),
-        cube: args.cube,
-    };
+    let info_stamp = get_stamp().unwrap_or_else(|| {
+        warn!("radar_info: system clock unavailable, using epoch-zero timestamp");
+        Time { sec: 0, nanosec: 0 }
+    });
+    let info_msg = RadarInfo::builder()
+        .stamp(info_stamp)
+        .frame_id(args.base_frame_id.clone())
+        .center_frequency(args.center_frequency.to_string())
+        .frequency_sweep(args.frequency_sweep.to_string())
+        .range_toggle(args.range_toggle.to_string())
+        .detection_sensitivity(args.detection_sensitivity.to_string())
+        .cube(args.cube)
+        .build()
+        .unwrap();
 
     let info_session = session.clone();
-    let info_msg = ZBytes::from(serde_cdr::serialize(&info_msg).unwrap());
+    let info_msg = ZBytes::from(info_msg.into_cdr());
     let info_enc = Encoding::APPLICATION_CDR.with_schema("edgefirst_msgs/msg/RadarInfo");
     let tf_task =
         tokio::spawn(async move { radar_info(info_session, info_msg, info_enc).await.unwrap() });
@@ -292,64 +291,63 @@ fn format_targets(
         .flat_map(|elem| elem.to_ne_bytes())
         .collect();
 
-    let fields = vec![
-        sensor_msgs::PointField {
-            name: String::from("x"),
+    let fields = [
+        PointFieldView {
+            name: "x",
             offset: 0,
             datatype: PointFieldType::FLOAT32 as u8,
             count: 1,
         },
-        sensor_msgs::PointField {
-            name: String::from("y"),
+        PointFieldView {
+            name: "y",
             offset: 4,
             datatype: PointFieldType::FLOAT32 as u8,
             count: 1,
         },
-        sensor_msgs::PointField {
-            name: String::from("z"),
+        PointFieldView {
+            name: "z",
             offset: 8,
             datatype: PointFieldType::FLOAT32 as u8,
             count: 1,
         },
-        sensor_msgs::PointField {
-            name: String::from("speed"),
+        PointFieldView {
+            name: "speed",
             offset: 12,
             datatype: PointFieldType::FLOAT32 as u8,
             count: 1,
         },
-        sensor_msgs::PointField {
-            name: String::from("power"),
+        PointFieldView {
+            name: "power",
             offset: 16,
             datatype: PointFieldType::FLOAT32 as u8,
             count: 1,
         },
-        sensor_msgs::PointField {
-            name: String::from("rcs"),
+        PointFieldView {
+            name: "rcs",
             offset: 20,
             datatype: PointFieldType::FLOAT32 as u8,
             count: 1,
         },
     ];
 
-    let msg = sensor_msgs::PointCloud2 {
-        header: std_msgs::Header {
-            stamp: get_stamp().unwrap_or_else(|| {
-                warn!("targets: system clock unavailable, using epoch-zero timestamp");
-                Time { sec: 0, nanosec: 0 }
-            }),
-            frame_id: frame_id.to_string(),
-        },
-        height: 1,
-        width: n_targets,
-        fields,
-        is_bigendian: false,
-        point_step: 24,
-        row_step: 24 * n_targets,
-        data,
-        is_dense: true,
-    };
+    let stamp = get_stamp().unwrap_or_else(|| {
+        warn!("targets: system clock unavailable, using epoch-zero timestamp");
+        Time { sec: 0, nanosec: 0 }
+    });
+    let msg = PointCloud2::builder()
+        .stamp(stamp)
+        .frame_id(frame_id)
+        .height(1)
+        .width(n_targets)
+        .fields(&fields)
+        .is_bigendian(false)
+        .point_step(24)
+        .row_step(24 * n_targets)
+        .data(&data)
+        .is_dense(true)
+        .build()?;
 
-    let msg = ZBytes::from(serde_cdr::serialize(&msg)?);
+    let msg = ZBytes::from(msg.into_cdr());
     let enc = Encoding::APPLICATION_CDR.with_schema("sensor_msgs/msg/PointCloud2");
 
     Ok((msg, enc))
@@ -405,7 +403,7 @@ async fn clustering_task(
                 })
                 .collect();
             let clusters = clustering
-                .cluster(dbscantargets, time.to_nanos())
+                .cluster(dbscantargets, time.to_nanos().unwrap_or(0))
                 .into_iter()
                 .map(|v| v[4]);
 
@@ -464,67 +462,65 @@ fn format_clusters<T: Iterator<Item = f32>>(
         })
         .flat_map(|elem| elem.to_ne_bytes())
         .collect();
-    let fields = vec![
-        sensor_msgs::PointField {
-            name: String::from("x"),
+    let fields = [
+        PointFieldView {
+            name: "x",
             offset: 0,
             datatype: PointFieldType::FLOAT32 as u8,
             count: 1,
         },
-        sensor_msgs::PointField {
-            name: String::from("y"),
+        PointFieldView {
+            name: "y",
             offset: 4,
             datatype: PointFieldType::FLOAT32 as u8,
             count: 1,
         },
-        sensor_msgs::PointField {
-            name: String::from("z"),
+        PointFieldView {
+            name: "z",
             offset: 8,
             datatype: PointFieldType::FLOAT32 as u8,
             count: 1,
         },
-        sensor_msgs::PointField {
-            name: String::from("speed"),
+        PointFieldView {
+            name: "speed",
             offset: 12,
             datatype: PointFieldType::FLOAT32 as u8,
             count: 1,
         },
-        sensor_msgs::PointField {
-            name: String::from("power"),
+        PointFieldView {
+            name: "power",
             offset: 16,
             datatype: PointFieldType::FLOAT32 as u8,
             count: 1,
         },
-        sensor_msgs::PointField {
-            name: String::from("rcs"),
+        PointFieldView {
+            name: "rcs",
             offset: 20,
             datatype: PointFieldType::FLOAT32 as u8,
             count: 1,
         },
-        sensor_msgs::PointField {
-            name: String::from("cluster_id"),
+        PointFieldView {
+            name: "cluster_id",
             offset: 24,
             datatype: PointFieldType::FLOAT32 as u8,
             count: 1,
         },
     ];
 
-    let msg = sensor_msgs::PointCloud2 {
-        header: std_msgs::Header {
-            stamp: time,
-            frame_id,
-        },
-        height: 1,
-        width: targets.len() as u32,
-        fields,
-        is_bigendian: false,
-        point_step: 28,
-        row_step: 28 * targets.len() as u32,
-        data,
-        is_dense: true,
-    };
+    let msg = PointCloud2::builder()
+        .stamp(time)
+        .frame_id(frame_id)
+        .height(1)
+        .width(targets.len() as u32)
+        .fields(&fields)
+        .is_bigendian(false)
+        .point_step(28)
+        .row_step(28 * targets.len() as u32)
+        .data(&data)
+        .is_dense(true)
+        .build()?;
 
-    let msg = ZBytes::from(serde_cdr::serialize(&msg)?);
+    let msg = ZBytes::from(msg.into_cdr());
     let enc = Encoding::APPLICATION_CDR.with_schema("sensor_msgs/msg/PointCloud2");
 
     Ok((msg, enc))
@@ -630,7 +626,7 @@ fn format_cube(
     cubemsg: RadarCube,
     frame_id: &str,
 ) -> Result<(ZBytes, Encoding), Box<dyn std::error::Error>> {
-    let layout = vec![
+    let layout = [
         edgefirst_msgs::radar_cube_dimension::SEQUENCE,
         edgefirst_msgs::radar_cube_dimension::RANGE,
         edgefirst_msgs::radar_cube_dimension::RXCHANNEL,
@@ -639,7 +635,7 @@ fn format_cube(
 
     // Double the final dimension to account for complex data.
     let shape = cubemsg.data.shape();
-    let shape = vec![
+    let shape = [
         shape[0] as u16,
         shape[1] as u16,
         shape[2] as u16,
@@ -670,25 +666,24 @@ fn format_cube(
         })
     };
 
-    let msg = edgefirst_msgs::RadarCube {
-        header: std_msgs::Header {
-            stamp,
-            frame_id: frame_id.to_string(),
-        },
-        timestamp: cubemsg.timestamp,
-        layout,
-        shape,
-        scales: vec![
-            1.0,
-            cubemsg.bin_properties.range_per_bin,
-            1.0,
-            cubemsg.bin_properties.speed_per_bin,
-        ],
-        cube: data2,
-        is_complex: true,
-    };
+    let scales = [
+        1.0,
+        cubemsg.bin_properties.range_per_bin,
+        1.0,
+        cubemsg.bin_properties.speed_per_bin,
+    ];
+    let msg = edgefirst_msgs::RadarCube::builder()
+        .stamp(stamp)
+        .frame_id(frame_id)
+        .timestamp(cubemsg.timestamp)
+        .layout(&layout)
+        .shape(&shape)
+        .scales(&scales)
+        .cube(&data2)
+        .is_complex(true)
+        .build()?;
 
-    let msg = ZBytes::from(serde_cdr::serialize(&msg)?);
+    let msg = ZBytes::from(msg.into_cdr());
     let enc = Encoding::APPLICATION_CDR.with_schema("edgefirst_msgs/msg/RadarCube");
 
     Ok((msg, enc))
