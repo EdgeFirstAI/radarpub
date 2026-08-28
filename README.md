@@ -38,7 +38,7 @@ RadarPub bridges automotive radar sensors to the EdgeFirst Perception stack, pro
 
 - Linux system with SocketCAN support (kernel 2.6.25+)
 - CAN interface hardware (or virtual CAN for testing)
-- Rust toolchain 1.70+ (for building from source)
+- Rust toolchain 1.95+ (for building from source)
 
 ### Installation
 
