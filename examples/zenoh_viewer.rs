@@ -209,18 +209,12 @@ fn handle_pointcloud(
     entity_path: &str,
     payload: &[u8],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Deserialize PointCloud2 message from CDR
-    let pointcloud: edgefirst_schemas::sensor_msgs::PointCloud2 =
-        edgefirst_schemas::serde_cdr::deserialize(payload)?;
+    let pointcloud = edgefirst_schemas::sensor_msgs::PointCloud2::from_cdr(payload)?;
 
     debug!(
         "Received PointCloud2: {} points, fields: {:?}",
-        pointcloud.width * pointcloud.height,
-        pointcloud
-            .fields
-            .iter()
-            .map(|f| &f.name)
-            .collect::<Vec<_>>()
+        pointcloud.point_count(),
+        pointcloud.fields_iter().map(|f| f.name).collect::<Vec<_>>()
     );
 
     // Parse point cloud data
@@ -248,26 +242,29 @@ fn handle_radar_cube(
     rr: &RecordingStream,
     payload: &[u8],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Deserialize RadarCube message
-    let cube: edgefirst_schemas::edgefirst_msgs::RadarCube =
-        edgefirst_schemas::serde_cdr::deserialize(payload)?;
+    let cube = edgefirst_schemas::edgefirst_msgs::RadarCube::from_cdr(payload)?;
 
     debug!(
         "Received RadarCube: timestamp {} with {} cube elements",
-        cube.timestamp,
-        cube.cube.len()
+        cube.timestamp(),
+        cube.cube().len()
     );
 
     // Convert cube data to tensor for visualization
     let data = ndarray::Array::from_shape_vec(
-        cube.shape.iter().map(|&x| x as usize).collect::<Vec<_>>(),
-        cube.cube
+        cube.shape().iter().map(|&x| x as usize).collect::<Vec<_>>(),
+        cube.cube()
             .iter()
             .map(|x| x.unsigned_abs())
             .collect::<Vec<_>>(),
     )?;
 
-    let tensor = rerun::Tensor::try_from(data)?.with_dim_names(["SEQ", "RANGE", "RX", "DOPPLER"]);
+    let shape: Vec<u64> = data.shape().iter().map(|&d| d as u64).collect();
+    let values: Vec<u16> = data.iter().copied().collect();
+    let tensor = rerun::Tensor::new(
+        rerun::TensorData::new(shape, rerun::TensorBuffer::U16(values.into()))
+            .with_dim_names(["SEQ", "RANGE", "RX", "DOPPLER"]),
+    );
 
     rr.log("radar/cube", &tensor)?;
 
@@ -279,31 +276,26 @@ fn handle_transform(
     rr: &RecordingStream,
     payload: &[u8],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Deserialize TransformStamped message
-    let tf: edgefirst_schemas::geometry_msgs::TransformStamped =
-        edgefirst_schemas::serde_cdr::deserialize(payload)?;
+    let tf = edgefirst_schemas::geometry_msgs::TransformStamped::from_cdr(payload)?;
 
-    debug!(
-        "Received TF: {} -> {}",
-        tf.header.frame_id, tf.child_frame_id
-    );
+    debug!("Received TF: {} -> {}", tf.frame_id(), tf.child_frame_id());
 
-    // Log transform to Rerun
+    let transform = tf.transform();
     let translation = [
-        tf.transform.translation.x as f32,
-        tf.transform.translation.y as f32,
-        tf.transform.translation.z as f32,
+        transform.translation.x as f32,
+        transform.translation.y as f32,
+        transform.translation.z as f32,
     ];
 
     let rotation = rerun::Quaternion::from_xyzw([
-        tf.transform.rotation.x as f32,
-        tf.transform.rotation.y as f32,
-        tf.transform.rotation.z as f32,
-        tf.transform.rotation.w as f32,
+        transform.rotation.x as f32,
+        transform.rotation.y as f32,
+        transform.rotation.z as f32,
+        transform.rotation.w as f32,
     ]);
 
     rr.log(
-        format!("world/{}", tf.child_frame_id),
+        format!("world/{}", tf.child_frame_id()),
         &rerun::Transform3D::from_translation_rotation(translation, rotation),
     )?;
 
@@ -322,10 +314,10 @@ struct Point {
 
 /// Parse PointCloud2 data into Point structures
 fn parse_pointcloud2(
-    msg: &edgefirst_schemas::sensor_msgs::PointCloud2,
+    msg: &edgefirst_schemas::sensor_msgs::PointCloud2<&[u8]>,
 ) -> Result<Vec<Point>, Box<dyn std::error::Error>> {
-    let point_step = msg.point_step as usize;
-    let num_points = (msg.width * msg.height) as usize;
+    let point_step = msg.point_step() as usize;
+    let num_points = msg.point_count();
     let mut points = Vec::with_capacity(num_points);
 
     // Find field offsets
@@ -335,8 +327,8 @@ fn parse_pointcloud2(
     let mut intensity_offset = None;
     let mut track_id_offset = None;
 
-    for field in &msg.fields {
-        match field.name.as_str() {
+    for field in msg.fields_iter() {
+        match field.name {
             "x" => x_offset = Some(field.offset as usize),
             "y" => y_offset = Some(field.offset as usize),
             "z" => z_offset = Some(field.offset as usize),
@@ -349,10 +341,11 @@ fn parse_pointcloud2(
     let x_off = x_offset.ok_or("Missing x field")?;
     let y_off = y_offset.ok_or("Missing y field")?;
     let z_off = z_offset.ok_or("Missing z field")?;
+    let data = msg.data();
 
     for i in 0..num_points {
         let offset = i * point_step;
-        let point_data = &msg.data[offset..offset + point_step];
+        let point_data = &data[offset..offset + point_step];
 
         let x = f32::from_le_bytes(point_data[x_off..x_off + 4].try_into()?);
         let y = f32::from_le_bytes(point_data[y_off..y_off + 4].try_into()?);

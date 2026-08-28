@@ -78,7 +78,7 @@ let can_id = CanId::new(0x1FFFFFFF, true)?;
 
 **Standards:**
 
-- Rust: Latest stable (currently 1.84.1), `cargo fmt`, `cargo clippy -- -D warnings`
+- Rust: Latest stable (MSRV 1.95), `cargo fmt`, `cargo clippy -- -D warnings`
 - Zero warnings policy in CI/CD
 - Follow Rust API guidelines
 
@@ -164,7 +164,7 @@ fn test_edge_cases() {
 
 **RadarPub - EdgeFirst Perception Radar Node**
 
-- **Language**: Rust 1.70+ (currently 1.84.1)
+- **Language**: Rust 1.95+ (MSRV; currently latest stable)
 - **Build system**: Cargo with feature flags
 - **Key dependencies**:
   - `tokio` - Async runtime for multi-threaded execution

@@ -14,46 +14,45 @@ This software includes the following third-party components:
 
 **Core Runtime & Async:**
 
-- tokio v1.48.0 (MIT) - Copyright Tokio Contributors
-- tracing v0.1.41 (MIT) - Copyright Tokio Contributors
-- tracing-subscriber v0.3.20 (MIT) - Copyright Tokio Contributors
+- tokio v1.53.1 (MIT) - Copyright Tokio Contributors
+- tracing v0.1.44 (MIT) - Copyright Tokio Contributors
+- tracing-subscriber v0.3.23 (MIT) - Copyright Tokio Contributors
 - tracing-log v0.2.0 (MIT) - Copyright Tokio Contributors
-- tracing-journald v0.3.1 (MIT) - Copyright Tokio Contributors
-- env_logger v0.11.7 (MIT OR Apache-2.0) - Copyright env_logger developers
-- log v0.4.27 (MIT OR Apache-2.0) - Copyright The Rust Project Developers
+- tracing-journald v0.3.2 (MIT) - Copyright Tokio Contributors
+- env_logger v0.11.11 (MIT OR Apache-2.0) - Copyright env_logger developers
+- log v0.4.34 (MIT OR Apache-2.0) - Copyright The Rust Project Developers
 
 **Zenoh Middleware:**
 
-- zenoh v1.6.2 (EPL-2.0 OR Apache-2.0) - Copyright 2024 ZettaScale Technology
+- zenoh v1.10.0 (EPL-2.0 OR Apache-2.0) - Copyright 2024 ZettaScale Technology
 
 **Sensor Interfaces:**
 
-- socketcan v3.5.0 (MIT) - Copyright socketcan-rs contributors
-- libc v0.2.172 (MIT OR Apache-2.0) - Copyright The Rust Project Developers
+- socketcan v3.6.2 (MIT) - Copyright socketcan-rs contributors
+- libc v0.2.189 (MIT OR Apache-2.0) - Copyright The Rust Project Developers
 
 **Data Processing:**
 
-- ndarray v0.16.1 (MIT OR Apache-2.0) - Copyright ndarray developers
-- nalgebra v0.33.2 (Apache-2.0) - Copyright nalgebra developers
+- ndarray v0.17.2 (MIT OR Apache-2.0) - Copyright ndarray developers
+- nalgebra v0.35.0 (Apache-2.0) - Copyright nalgebra developers
 - num v0.4.3 (MIT OR Apache-2.0) - Copyright The Rust Project Developers
 
 **Clustering & Tracking:**
 
 - dbscan v0.3.1 (MIT) - Copyright dbscan-rs developers
-- lapjv v0.2.1 (MIT) - Copyright lapjv-rs developers
+- lapjv v0.3.0 (MIT) - Copyright lapjv-rs developers
 
 **Message Serialization:**
 
-- cdr v0.2.4 (MIT OR Apache-2.0) - Copyright cdr-rs developers
-- serde_json v1.0.145 (MIT OR Apache-2.0) - Copyright Serde Developers
-- edgefirst-schemas v1.4.1+ (Apache-2.0) - Copyright 2025 Au-Zone Technologies
+- serde_json v1.0.151 (MIT OR Apache-2.0) - Copyright Serde Developers
+- edgefirst-schemas v4.0.0 (Apache-2.0) - Copyright 2025 Au-Zone Technologies
   > **Note:** Internal Au-Zone dependency for EdgeFirst message format definitions
 
 **Protocol & Utilities:**
 
 - crc16 v0.4.0 (MIT) - Copyright crc16 developers
-- uuid v1.18.1 (Apache-2.0 OR MIT) - Copyright uuid developers
-- clap v4.5.53 (MIT OR Apache-2.0) - Copyright clap-rs developers
+- uuid v1.26.0 (Apache-2.0 OR MIT) - Copyright uuid developers
+- clap v4.6.6 (MIT OR Apache-2.0) - Copyright clap-rs developers
 
 **Inter-thread Communication:**
 
@@ -61,8 +60,8 @@ This software includes the following third-party components:
 
 **Profiling (Optional):**
 
-- tracing-tracy v0.11.4 (MIT OR Apache-2.0) - Copyright Embark Studios
-- tracy-client v0.18.3 (MIT OR Apache-2.0) - Copyright Embark Studios
+- tracing-tracy v0.12.0 (MIT OR Apache-2.0) - Copyright Embark Studios
+- tracy-client v0.19.0 (MIT OR Apache-2.0) - Copyright Embark Studios
 
 ### License Summary
 

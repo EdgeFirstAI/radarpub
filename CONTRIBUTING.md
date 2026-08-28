@@ -29,7 +29,7 @@ We welcome contributions in many forms:
 
 **Required:**
 
-- Rust toolchain 1.70 or later ([rustup](https://rustup.rs/))
+- Rust toolchain 1.95 or later ([rustup](https://rustup.rs/))
 - Linux development environment (required for SocketCAN)
 - Git for version control
 

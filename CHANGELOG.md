@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Upgrade `edgefirst-schemas` from 1.5.2 to 4.0.0: replace `serde_cdr`
+  serialize/deserialize with builders, `from_cdr`/`into_cdr`, and O(1)
+  accessors (EDGEAI-1428)
+- Refresh crate dependencies (zenoh 1.10, ndarray 0.17, nalgebra 0.35,
+  clap 4.6, tokio 1.53, tracy 0.12/0.19, rerun 0.36)
+- Raise MSRV to 1.95 (`package.rust-version`) to match `rerun` 0.36 and
+  the rest of the refreshed dependency set
+
 ### Fixed
 
 - Use wall-clock time (`CLOCK_REALTIME`) for all ROS 2 Header timestamps instead
