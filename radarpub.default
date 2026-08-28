@@ -51,7 +51,7 @@ DETECTION_SENSITIVITY="medium"
 # Data Cube Streaming
 # ---------------------------------------------------------------------------
 # Enable streaming the low-level radar data cube on the cube topic
-# (rt/radar/cube). The data cube contains raw range-Doppler data useful
+# (radar/cube). The data cube contains raw range-Doppler data useful
 # for advanced signal processing or visualization.
 CUBE="false"
 
@@ -60,7 +60,7 @@ CUBE="false"
 # ---------------------------------------------------------------------------
 # Enable the radar target clustering task. When enabled, individual radar
 # detections are grouped into clusters using the DBSCAN algorithm and
-# published on the clusters topic (rt/radar/clusters).
+# published on the clusters topic (radar/clusters).
 CLUSTERING="false"
 
 # Clustering window size in frames. Each radar frame is approximately 55ms.
