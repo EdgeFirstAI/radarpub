@@ -249,7 +249,12 @@ async fn stream(
 
                 let span = info_span!("targets_publish");
                 async {
-                    match targets_publisher.put(msg).encoding(enc).await {
+                    match targets_publisher
+                        .put(msg)
+                        .encoding(enc)
+                        .timestamp(session.new_timestamp())
+                        .await
+                    {
                         Ok(_) => {}
                         Err(e) => error!("{} publish error: {:?}", args.targets_topic, e),
                     }
@@ -420,7 +425,12 @@ async fn clustering_task(
 
         let span = info_span!("clusters_publish");
         async {
-            match publisher.put(msg).encoding(enc).await {
+            match publisher
+                .put(msg)
+                .encoding(enc)
+                .timestamp(session.new_timestamp())
+                .await
+            {
                 Ok(_) => {}
                 Err(e) => error!("{} message error: {:?}", args.clusters_topic, e),
             }
@@ -599,7 +609,12 @@ async fn cube_loop(
                         let (msg, enc) = format_cube(cubemsg, &frame_id).unwrap();
                         let span = info_span!("cube_publish");
                         async {
-                            match cube_publisher.put(msg).encoding(enc).await {
+                            match cube_publisher
+                                .put(msg)
+                                .encoding(enc)
+                                .timestamp(session.new_timestamp())
+                                .await
+                            {
                                 Ok(_) => {}
                                 Err(e) => error!("publish cube error: {:?}", e),
                             }
@@ -713,9 +728,15 @@ async fn tf_static(
     loop {
         interval.tick().await;
         let span = info_span!("tf_static_publish");
-        async { session.put(&topic, msg.clone()).encoding(enc.clone()).await }
-            .instrument(span)
-            .await?;
+        async {
+            session
+                .put(&topic, msg.clone())
+                .encoding(enc.clone())
+                .timestamp(session.new_timestamp())
+                .await
+        }
+        .instrument(span)
+        .await?;
     }
 }
 
@@ -730,9 +751,15 @@ async fn radar_info(
     loop {
         interval.tick().await;
         let span = info_span!("radar_info_publish");
-        async { session.put(&topic, msg.clone()).encoding(enc.clone()).await }
-            .instrument(span)
-            .await?;
+        async {
+            session
+                .put(&topic, msg.clone())
+                .encoding(enc.clone())
+                .timestamp(session.new_timestamp())
+                .await
+        }
+        .instrument(span)
+        .await?;
     }
 }
 
