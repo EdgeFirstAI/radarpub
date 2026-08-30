@@ -129,7 +129,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.clusters {
         info!("Subscribing to */radar/clusters");
         let rr_clone = rr.clone();
-        let sub = session.declare_subscriber("*/radar/clusters").await.unwrap();
+        let sub = session
+            .declare_subscriber("*/radar/clusters")
+            .await
+            .unwrap();
         tokio::spawn(async move {
             loop {
                 match sub.recv_async().await {
