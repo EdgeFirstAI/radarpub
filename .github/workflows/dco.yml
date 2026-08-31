@@ -1,6 +1,8 @@
 # GitHub Actions workflow for Developer Certificate of Origin (DCO) enforcement
 #
-# Ensures all commits are signed off per Apache-2.0 licensing requirements
+# Ensures all commits are signed off per Apache-2.0 licensing requirements.
+# Complements the DCO GitHub App; uses KineticCafe/actions-dco because
+# tim-actions/dco@v1.1 no longer resolves (upstream unmaintained).
 
 name: DCO Check
 
@@ -8,18 +10,18 @@ on:
   pull_request:
     branches: [ main, develop ]
 
+permissions: {}
+
 jobs:
   dco-check:
     name: Check DCO Sign-off
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: read
     steps:
       - name: Check DCO
-        uses: tim-actions/dco@v1.1
-        with:
-          # Require all commits to have DCO sign-off
-          require-signoff: true
-          
+        uses: KineticCafe/actions-dco@v3.2.0
+
       - name: DCO Check Failed
         if: failure()
         run: |
