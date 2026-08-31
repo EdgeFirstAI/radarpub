@@ -78,10 +78,10 @@ graph TB
     CAN_OUT -->|Target List| CAN_READ
     UDP_OUT -->|Radar Cube<br/>~2100 packets/frame| UDP_READ
     
-    ZEN_TARGETS -->|/rt/radar/targets<br/>/rt/radar/clusters| ZENOH
-    ZEN_CUBE -->|/rt/radar/cube| ZENOH
-    TF -->|/rt/tf_static| ZENOH
-    INFO -->|/rt/radar/info| ZENOH
+    ZEN_TARGETS -->|radar/targets<br/>radar/clusters| ZENOH
+    ZEN_CUBE -->|radar/cube| ZENOH
+    TF -->|tf_static| ZENOH
+    INFO -->|radar/info| ZENOH
 
     classDef radarStyle fill:#e1f5ff,stroke:#0288d1,stroke-width:2px
     classDef threadStyle fill:#fff3e0,stroke:#f57c00,stroke-width:2px
@@ -268,7 +268,7 @@ graph TB
    - CDR serialization (little-endian)
 
 7. **Zenoh Publishing**
-   - Topic: `/rt/radar/targets` or `/rt/radar/clusters`
+   - Topic: `radar/targets` or `radar/clusters`
    - Encoding: `application/cdr` with ROS2 schema
 
 ### Radar Cube Processing (UDP Path)
@@ -290,7 +290,7 @@ graph TB
    - CDR serialization
 
 4. **Zenoh Publishing**
-   - Topic: `/rt/radar/cube`
+   - Topic: `radar/cube`
    - Large message handling (SHM when available)
 
 ---
@@ -508,7 +508,7 @@ packet-beta
 ### Topic Structure
 
 ```
-/rt/                    # Real-time namespace
+{hostname}/              # Session namespace (system hostname)
   radar/
     targets             # Raw target detections (PointCloud2)
     clusters            # Clustered targets (PointCloud2)

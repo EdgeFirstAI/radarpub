@@ -81,7 +81,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("No Rerun output specified (use --viewer, --connect, or --record)".into());
     };
 
-    // Configure Zenoh
+    // Leave the session namespace unset. The publisher namespaces by *its*
+    // hostname, so a viewer on another machine must subscribe to the full
+    // wire keys (`*/radar/targets`), not the viewer's hostname.
     let mut config = Config::default();
 
     if args.zenoh_mode == "client" {
@@ -102,12 +104,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Subscribe to topics
 
     if args.targets {
-        info!("Subscribing to /rt/radar/targets");
+        info!("Subscribing to */radar/targets");
         let rr_clone = rr.clone();
-        let sub = session
-            .declare_subscriber("/rt/radar/targets")
-            .await
-            .unwrap();
+        let sub = session.declare_subscriber("*/radar/targets").await.unwrap();
         tokio::spawn(async move {
             loop {
                 match sub.recv_async().await {
@@ -128,10 +127,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if args.clusters {
-        info!("Subscribing to /rt/radar/clusters");
+        info!("Subscribing to */radar/clusters");
         let rr_clone = rr.clone();
         let sub = session
-            .declare_subscriber("/rt/radar/clusters")
+            .declare_subscriber("*/radar/clusters")
             .await
             .unwrap();
         tokio::spawn(async move {
@@ -154,9 +153,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if args.cube {
-        info!("Subscribing to /rt/radar/cube");
+        info!("Subscribing to */radar/cube");
         let rr_clone = rr.clone();
-        let sub = session.declare_subscriber("/rt/radar/cube").await.unwrap();
+        let sub = session.declare_subscriber("*/radar/cube").await.unwrap();
         tokio::spawn(async move {
             loop {
                 match sub.recv_async().await {
@@ -175,9 +174,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Subscribe to TF transforms
-    info!("Subscribing to /tf_static");
+    info!("Subscribing to */tf_static");
     let rr_clone = rr.clone();
-    let _tf_sub = session.declare_subscriber("/tf_static").await.unwrap();
+    let _tf_sub = session.declare_subscriber("*/tf_static").await.unwrap();
     tokio::spawn(async move {
         loop {
             match _tf_sub.recv_async().await {

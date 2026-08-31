@@ -89,18 +89,18 @@ radarpub --can-interface can0 --zenoh-mode peer
 
 ```bash
 # Using Zenoh bridge or subscriber
-z_sub -t "/rt/radar/**"
+z_sub -t "*/radar/**"
 ```
 
 ### Published Zenoh Topics
 
 | Topic | Message Type | Description |
 |-------|--------------|-------------|
-| `/rt/radar/targets` | sensor_msgs/PointCloud2 | Raw target detections (x, y, z, speed, power, rcs) |
-| `/rt/radar/clusters` | sensor_msgs/PointCloud2 | Clustered targets with tracking IDs |
-| `/rt/radar/cube` | edgefirst_msgs/RadarCube | Full 4D radar data cube (complex i16) |
-| `/rt/tf_static` | geometry_msgs/TransformStamped | Radar sensor frame transform |
-| `/rt/radar/info` | edgefirst_msgs/RadarInfo | Radar configuration and parameters |
+| `radar/targets` | sensor_msgs/PointCloud2 | Raw target detections (x, y, z, speed, power, rcs) |
+| `radar/clusters` | sensor_msgs/PointCloud2 | Clustered targets with tracking IDs |
+| `radar/cube` | edgefirst_msgs/RadarCube | Full 4D radar data cube (complex i16) |
+| `tf_static` | geometry_msgs/TransformStamped | Radar sensor frame transform |
+| `radar/info` | edgefirst_msgs/RadarInfo | Radar configuration and parameters |
 
 ### Performance Characteristics
 

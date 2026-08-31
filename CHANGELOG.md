@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Attach a Zenoh source timestamp on published radar and `tf_static`
+  samples so the recorder can use publisher time instead of receive time.
+- Set the Zenoh session namespace to the system hostname and drop the `rt/`
+  prefix from default key expressions. Wire keys are `{hostname}/radar/…`
+  and `{hostname}/tf_static` (EDGEAI-1396).
 - Upgrade `edgefirst-schemas` from 1.5.2 to 4.0.0: replace `serde_cdr`
   serialize/deserialize with builders, `from_cdr`/`into_cdr`, and O(1)
   accessors (EDGEAI-1428)

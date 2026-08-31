@@ -7280,6 +7280,7 @@ dependencies = [
  "edgefirst-schemas",
  "env_logger",
  "etherparse",
+ "gethostname",
  "kanal",
  "lapjv",
  "libc",

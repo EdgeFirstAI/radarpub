@@ -290,15 +290,15 @@ pub struct Args {
     pub radar_frame_id: String,
 
     /// Radar targets topic name
-    #[arg(long, default_value = "rt/radar/targets")]
+    #[arg(long, default_value = "radar/targets")]
     pub targets_topic: String,
 
     /// Radar clusters topic name
-    #[arg(long, default_value = "rt/radar/clusters")]
+    #[arg(long, default_value = "radar/clusters")]
     pub clusters_topic: String,
 
     /// Radar data cube topic name
-    #[arg(long, default_value = "rt/radar/cube")]
+    #[arg(long, default_value = "radar/cube")]
     pub cube_topic: String,
 
     /// Application log level
@@ -326,9 +326,33 @@ pub struct Args {
     no_multicast_scouting: bool,
 }
 
+/// System hostname used as the Zenoh session namespace.
+///
+/// Empty or `/`-containing hostnames would create unintended sub-keys, so we
+/// fall back to `"localhost"` and warn. Two devices both falling back would
+/// silently share a namespace; that is a deployment defect.
+fn zenoh_namespace() -> String {
+    let raw = gethostname::gethostname().to_string_lossy().into_owned();
+    if raw.is_empty() || raw.contains('/') {
+        tracing::warn!(
+            hostname = %raw,
+            "system hostname is empty or contains '/' — falling back to \"localhost\""
+        );
+        "localhost".into()
+    } else {
+        raw
+    }
+}
+
 impl From<Args> for Config {
     fn from(args: Args) -> Self {
         let mut config = Config::default();
+
+        // Session namespace = hostname: application keys are bare
+        // (`radar/targets`) and the wire form is `{hostname}/radar/targets`.
+        config
+            .insert_json5("namespace", &json!(zenoh_namespace()).to_string())
+            .unwrap();
 
         config
             .insert_json5("mode", &json!(args.mode).to_string())
@@ -357,5 +381,43 @@ impl From<Args> for Config {
             .unwrap();
 
         config
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn parse_cli() -> Args {
+        Args::parse_from([
+            "edgefirst-radarpub",
+            "--targets-topic",
+            "radar/targets",
+            "--clusters-topic",
+            "radar/clusters",
+            "--cube-topic",
+            "radar/cube",
+        ])
+    }
+
+    #[test]
+    fn zenoh_config_sets_namespace() {
+        let ns = zenoh_namespace();
+        assert!(!ns.is_empty(), "namespace should be non-empty");
+        assert!(!ns.contains('/'), "namespace must not contain '/'");
+        let rendered = Config::from(parse_cli()).to_string();
+        assert!(
+            rendered.contains(&ns),
+            "config should include namespace {ns}: {rendered}"
+        );
+    }
+
+    #[test]
+    fn cli_topics_have_no_rt_prefix() {
+        let args = parse_cli();
+        assert_eq!(args.targets_topic, "radar/targets");
+        assert_eq!(args.clusters_topic, "radar/clusters");
+        assert_eq!(args.cube_topic, "radar/cube");
     }
 }
