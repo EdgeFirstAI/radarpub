@@ -105,8 +105,8 @@ ip -details link show can0
 # Enable clustering
 ./target/release/edgefirst-radarpub --can can0 --clustering
 
-# Specify custom topic prefix
-./target/release/edgefirst-radarpub --can can0 --prefix rt/radar
+# Override topic names (application keys; wire form is {hostname}/<topic>)
+./target/release/edgefirst-radarpub --can can0 --targets-topic radar/targets
 
 # Connect to specific Zenoh router
 ./target/release/edgefirst-radarpub --can can0 --connect tcp/192.168.1.1:7447
@@ -151,14 +151,17 @@ Use Zenoh tools to verify messages are being published:
 # Install zenoh tools if needed
 cargo install zenoh
 
-# Subscribe to target messages
-z_sub -k "rt/radar/targets"
+# Subscribe to target messages (wildcard matches any publisher hostname)
+z_sub -k "*/radar/targets"
 
 # Subscribe to cluster messages
-z_sub -k "rt/radar/clusters"
+z_sub -k "*/radar/clusters"
 
 # Subscribe to all radar topics
-z_sub -k "rt/radar/**"
+z_sub -k "*/radar/**"
+
+# Same-machine alternative using the publisher hostname
+z_sub -k "$(hostname)/radar/targets"
 ```
 
 ### Expected Console Output
@@ -203,7 +206,7 @@ timeout 30 ./target/release/edgefirst-radarpub --eth 192.168.10.10
 ./target/release/edgefirst-radarpub --can can0
 
 # Verify targets appear in Zenoh
-z_sub -k "rt/radar/targets"
+z_sub -k "*/radar/targets"
 ```
 
 #### 4. Clustering Performance
@@ -213,7 +216,7 @@ z_sub -k "rt/radar/targets"
 ./target/release/edgefirst-radarpub --can can0 --clustering
 
 # Subscribe to cluster output
-z_sub -k "rt/radar/clusters"
+z_sub -k "*/radar/clusters"
 ```
 
 #### 5. Radar Cube Streaming (Ethernet only)
@@ -223,7 +226,7 @@ z_sub -k "rt/radar/clusters"
 ./target/release/edgefirst-radarpub --eth 192.168.10.10 --radar-cube
 
 # Subscribe to radar cube messages
-z_sub -k "rt/radar/cube"
+z_sub -k "*/radar/cube"
 ```
 
 ## Troubleshooting
