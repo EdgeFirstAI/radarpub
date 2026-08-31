@@ -94,13 +94,24 @@ z_sub -t "*/radar/**"
 
 ### Published Zenoh Topics
 
-| Topic | Message Type | Description |
+| Topic (application key) | Message Type | Description |
 |-------|--------------|-------------|
 | `radar/targets` | sensor_msgs/PointCloud2 | Raw target detections (x, y, z, speed, power, rcs) |
 | `radar/clusters` | sensor_msgs/PointCloud2 | Clustered targets with tracking IDs |
 | `radar/cube` | edgefirst_msgs/RadarCube | Full 4D radar data cube (complex i16) |
 | `tf_static` | geometry_msgs/TransformStamped | Radar sensor frame transform |
 | `radar/info` | edgefirst_msgs/RadarInfo | Radar configuration and parameters |
+
+**Wire keys:** The Zenoh session namespace is the system hostname, so application
+keys above appear on the network as `{hostname}/radar/targets`,
+`{hostname}/tf_static`, and so on. Cross-host subscribers should declare
+wildcards such as `*/radar/**` (any publisher) rather than their own hostname.
+Topic names can be overridden with `--targets-topic`, `--clusters-topic`, and
+`--cube-topic`.
+
+**Migration from v1.6.x:** Replace subscriptions to `rt/radar/…` with
+`{hostname}/radar/…` or the wildcard form `*/radar/…`. The `rt/` prefix and
+`--prefix` flag are no longer used.
 
 ### Performance Characteristics
 

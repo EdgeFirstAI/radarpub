@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-08-31
+
 ### Changed
 
 - Attach a Zenoh source timestamp on published radar and `tf_static`
@@ -172,7 +174,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CAN DRVEGRD messages now always treated as little endian
 - Clippy warnings resolved
 
-[Unreleased]: https://github.com/EdgeFirstAI/radarpub/compare/v1.6.3...HEAD
+[Unreleased]: https://github.com/EdgeFirstAI/radarpub/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/EdgeFirstAI/radarpub/compare/v1.6.3...v1.7.0
 [1.6.3]: https://github.com/EdgeFirstAI/radarpub/compare/v1.6.2...v1.6.3
 [1.6.2]: https://github.com/EdgeFirstAI/radarpub/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/EdgeFirstAI/radarpub/compare/v1.6.0...v1.6.1

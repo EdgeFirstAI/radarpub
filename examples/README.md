@@ -59,6 +59,13 @@ cargo run --example zenoh_viewer --features rerun -- --record output.rrd
 - Running RadarPub instance publishing to Zenoh
 - Or Zenoh router with radar data
 
+**Topic subscriptions:** RadarPub namespaces its Zenoh session with the system
+hostname. Application keys are bare (`radar/targets`, `radar/clusters`,
+`radar/cube`, `tf_static`); wire keys are `{hostname}/radar/targets`, etc.
+The viewer leaves its own session namespace unset and subscribes with wildcards
+(`*/radar/targets`, `*/radar/clusters`, `*/radar/cube`, `*/tf_static`) so it
+works across hosts. Prefer `*/radar/**` when inspecting traffic with `z_sub`.
+
 ---
 
 ## Building Examples

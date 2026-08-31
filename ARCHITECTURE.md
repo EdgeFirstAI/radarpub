@@ -268,7 +268,8 @@ graph TB
    - CDR serialization (little-endian)
 
 7. **Zenoh Publishing**
-   - Topic: `radar/targets` or `radar/clusters`
+   - Application key: `radar/targets` or `radar/clusters`
+   - Wire key: `{hostname}/radar/targets` (session namespace is the system hostname)
    - Encoding: `application/cdr` with ROS2 schema
 
 ### Radar Cube Processing (UDP Path)
@@ -290,7 +291,7 @@ graph TB
    - CDR serialization
 
 4. **Zenoh Publishing**
-   - Topic: `radar/cube`
+   - Application key: `radar/cube` (wire key `{hostname}/radar/cube`)
    - Large message handling (SHM when available)
 
 ---
