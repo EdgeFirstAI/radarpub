@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- CI: Remove obsolete DCO Actions workflow; DCO is enforced by the GitHub App
+- CI: Run SBOM via `workflow_call` from Release (no longer wait on a separate
+  SBOM check that may be missing if the workflow was inactive); add
+  `workflow_dispatch` for manual SBOM runs
+
 ## [1.7.0] - 2026-08-31
 
 ### Changed

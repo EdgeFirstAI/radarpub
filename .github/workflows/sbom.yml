@@ -15,7 +15,11 @@ on:
     branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
+  # Invoked by release.yml so publishing does not depend on a separate SBOM
+  # check existing for the tag SHA (that check was missing when this workflow
+  # was disabled_inactivity during v1.7.0).
   workflow_call:
+  workflow_dispatch:
   schedule:
     # Run weekly to catch new vulnerabilities
     - cron: '0 0 * * 0'

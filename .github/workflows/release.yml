@@ -1,19 +1,19 @@
 # GitHub Actions workflow for publishing releases
 #
 # This workflow orchestrates release publishing when a version tag is pushed:
-# - Waits for build.yml and sbom.yml workflows to complete
-# - Downloads build artifacts from the commit's workflow runs
-# - Creates GitHub Release with binaries and SBOM
+# - Waits for build.yml to complete for the tagged commit
+# - Runs sbom.yml via workflow_call (does not depend on a separate SBOM check)
+# - Downloads build artifacts and creates the GitHub Release
 #
 # Release Process:
 # 1. Update version in Cargo.toml
 # 2. Update CHANGELOG.md with version entry
-# 3. Commit and push changes (triggers build.yml and sbom.yml)
-# 4. Create and push tag: git tag v1.6.3 && git push --tags
-#    (release.yml waits for build.yml and sbom.yml to complete)
+# 3. Open and merge release/X.Y.Z PR (tag-release.yml creates the tag)
+# 4. This workflow publishes binaries + SBOM after Build succeeds
 #
-# Action Versions (verified January 2026):
+# Action Versions (verified August 2026):
 # - actions/checkout@v4
+# - actions/download-artifact@v4
 # - lewagon/wait-on-check-action@v1.3.4
 # - dawidd6/action-download-artifact@v6
 # - softprops/action-gh-release@v2
@@ -74,8 +74,8 @@ jobs:
           echo "$CHANGELOG" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-  wait-for-ci:
-    name: Wait for CI Workflows
+  wait-for-build:
+    name: Wait for Build Workflows
     needs: prepare-release
     runs-on: ubuntu-22.04
     steps:
@@ -95,20 +95,24 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 10
 
-      - name: Wait for SBOM workflow
-        uses: lewagon/wait-on-check-action@v1.3.4
-        with:
-          ref: ${{ github.sha }}
-          check-name: 'SBOM Generation and Validation'
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          wait-interval: 10
+  # Run SBOM in this workflow graph so Release no longer depends on a separate
+  # SBOM check existing for the SHA (that check was missing when sbom.yml was
+  # disabled_inactivity during the v1.7.0 tag push).
+  generate-sbom:
+    name: Generate SBOM
+    needs: prepare-release
+    uses: ./.github/workflows/sbom.yml
+    permissions:
+      contents: read
+      security-events: write
 
   create-github-release:
     name: Create GitHub Release
     runs-on: ubuntu-22.04
     needs:
       - prepare-release
-      - wait-for-ci
+      - wait-for-build
+      - generate-sbom
     permissions:
       contents: write
 
@@ -123,12 +127,11 @@ jobs:
           commit: ${{ github.sha }}
           path: artifacts
 
-      - name: Download SBOM artifact from commit
-        uses: dawidd6/action-download-artifact@v6
+      - name: Download SBOM artifact from this workflow run
+        uses: actions/download-artifact@v4
         with:
-          workflow: sbom.yml
-          commit: ${{ github.sha }}
-          path: artifacts
+          name: sbom
+          path: artifacts/sbom
 
       - name: Organize release assets
         run: |
