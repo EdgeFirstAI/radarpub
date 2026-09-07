@@ -183,6 +183,16 @@ impl fmt::Display for DetectionSensitivity {
     }
 }
 
+/// Environment variables where an empty value is meaningful and must be
+/// preserved by [`radarpub::scrub_empty_env`] (i.e. the argument has a
+/// non-empty default but `""` is a documented "disable" sentinel).
+///
+/// No radarpub argument uses an empty string as a sentinel: every env-bound
+/// argument with a non-empty default is a number, boolean, enum or frame ID
+/// for which `""` is simply invalid, and the list arguments (`CONNECT`,
+/// `LISTEN`) have no default so scrubbing them yields the same empty list.
+pub const KEEP: &[&str] = &[];
+
 /// Command-line arguments for EdgeFirst Radar Publisher.
 ///
 /// This structure defines all configuration options for the radar node,
@@ -388,8 +398,15 @@ impl From<Args> for Config {
 mod tests {
     use super::*;
     use clap::Parser;
+    use std::sync::Mutex;
+
+    /// Serialises tests that read or mutate the process environment: clap
+    /// consults `env` for every bound argument, and cargo runs tests on
+    /// parallel threads.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn parse_cli() -> Args {
+        let _guard = ENV_LOCK.lock().unwrap();
         Args::parse_from([
             "edgefirst-radarpub",
             "--targets-topic",
@@ -419,5 +436,73 @@ mod tests {
         assert_eq!(args.targets_topic, "radar/targets");
         assert_eq!(args.clusters_topic, "radar/clusters");
         assert_eq!(args.cube_topic, "radar/cube");
+    }
+
+    /// Env-bound arguments with a non-empty default where we have consciously
+    /// decided that an empty value is NOT meaningful (so scrubbing to the
+    /// default is correct).
+    const SCRUB_REVIEWED: &[&str] = &[
+        "CENTER_FREQUENCY",
+        "FREQUENCY_SWEEP",
+        "RANGE_TOGGLE",
+        "DETECTION_SENSITIVITY",
+        "CUBE",
+        "CLUSTERING",
+        "WINDOW_SIZE",
+        "CLUSTERING_EPS",
+        "CLUSTERING_PARAM_SCALE",
+        "CLUSTERING_POINT_LIMIT",
+        "RADAR_TF_VEC",
+        "RADAR_TF_QUAT",
+        "BASE_FRAME_ID",
+        "RADAR_FRAME_ID",
+        "RUST_LOG",
+        "MODE",
+    ];
+
+    #[test]
+    fn every_env_arg_is_either_scrubbable_or_explicitly_kept() {
+        use clap::CommandFactory;
+        for arg in Args::command().get_arguments() {
+            let Some(env) = arg.get_env() else { continue };
+            let name = env.to_string_lossy().into_owned();
+            let has_nonempty_default = arg
+                .get_default_values()
+                .first()
+                .is_some_and(|d| !d.is_empty());
+            if has_nonempty_default && !KEEP.contains(&name.as_str()) {
+                assert!(
+                    SCRUB_REVIEWED.contains(&name.as_str()),
+                    "{name} has a non-empty default; decide whether empty is meaningful \
+                     and add it to KEEP or SCRUB_REVIEWED"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn empty_env_vars_are_treated_as_unset() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // Mirrors /etc/default/radarpub entries written as KEY="".
+        std::env::set_var("CLUSTERING_EPS", "");
+        std::env::set_var("CLUSTERING", "");
+        std::env::set_var("CONNECT", "");
+
+        // Without the scrub clap sees the empty values and refuses to parse.
+        assert!(Args::try_parse_from(["edgefirst-radarpub"]).is_err());
+
+        // SAFETY: the environment lock is held and no other thread reads
+        // these variables.
+        unsafe { radarpub::scrub_empty_env::<Args>(KEEP) };
+
+        assert!(std::env::var_os("CLUSTERING_EPS").is_none());
+        assert!(std::env::var_os("CLUSTERING").is_none());
+        assert!(std::env::var_os("CONNECT").is_none());
+
+        let args = Args::try_parse_from(["edgefirst-radarpub"])
+            .expect("empty env vars must fall back to the declared defaults");
+        assert_eq!(args.clustering_eps, 1.0);
+        assert!(!args.clustering);
+        assert!(args.connect.is_empty());
     }
 }
