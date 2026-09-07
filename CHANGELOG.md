@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-09-07
+
+Patch release for EDGEAI-1094. Argument parsing only; no wire-format or
+configuration-key changes from 1.7.1.
+
 ### Fixed
 
 - Empty environment variables in `/etc/default/radarpub` (`KEY=""`) are now
@@ -189,7 +194,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CAN DRVEGRD messages now always treated as little endian
 - Clippy warnings resolved
 
-[Unreleased]: https://github.com/EdgeFirstAI/radarpub/compare/v1.7.1...HEAD
+[Unreleased]: https://github.com/EdgeFirstAI/radarpub/compare/v1.7.2...HEAD
+[1.7.2]: https://github.com/EdgeFirstAI/radarpub/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/EdgeFirstAI/radarpub/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/EdgeFirstAI/radarpub/compare/v1.6.3...v1.7.0
 [1.6.3]: https://github.com/EdgeFirstAI/radarpub/compare/v1.6.2...v1.6.3
