@@ -41,6 +41,11 @@ required-features = ["rerun", "zenoh"]
 name = "radarpub"
 path = "src/lib.rs"
 
+[[test]]
+name = "env_scrub"
+harness = false
+required-features = ["zenoh"]
+
 [features]
 default = ["tracy", "can", "zenoh"]
 can = ["dep:socketcan"]

@@ -398,15 +398,9 @@ impl From<Args> for Config {
 mod tests {
     use super::*;
     use clap::Parser;
-    use std::sync::Mutex;
-
-    /// Serialises tests that read or mutate the process environment: clap
-    /// consults `env` for every bound argument, and cargo runs tests on
-    /// parallel threads.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use std::collections::HashMap;
 
     fn parse_cli() -> Args {
-        let _guard = ENV_LOCK.lock().unwrap();
         Args::parse_from([
             "edgefirst-radarpub",
             "--targets-topic",
@@ -480,29 +474,52 @@ mod tests {
         }
     }
 
+    /// Fake environment lookup for `empty_env_vars`: tests must never mutate
+    /// the real process environment because libtest runs them on parallel
+    /// threads. The end-to-end scrub is covered by `tests/env_scrub.rs`,
+    /// which runs single-threaded with `harness = false`.
+    fn fake_env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let vars: HashMap<String, String> = vars
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        move |name| vars.get(name).cloned()
+    }
+
     #[test]
-    fn empty_env_vars_are_treated_as_unset() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        // Mirrors /etc/default/radarpub entries written as KEY="".
-        std::env::set_var("CLUSTERING_EPS", "");
-        std::env::set_var("CLUSTERING", "");
-        std::env::set_var("CONNECT", "");
+    fn empty_env_var_is_scrubbed() {
+        // Mirrors an /etc/default/radarpub entry written as KEY="".
+        let env = fake_env(&[("CLUSTERING_EPS", "")]);
+        assert_eq!(
+            radarpub::empty_env_vars::<Args>(KEEP, env),
+            ["CLUSTERING_EPS"]
+        );
+    }
 
-        // Without the scrub clap sees the empty values and refuses to parse.
-        assert!(Args::try_parse_from(["edgefirst-radarpub"]).is_err());
+    #[test]
+    fn non_empty_env_var_is_not_scrubbed() {
+        let env = fake_env(&[("CLUSTERING_EPS", "2.5"), ("CLUSTERING", "true")]);
+        assert!(radarpub::empty_env_vars::<Args>(KEEP, env).is_empty());
+    }
 
-        // SAFETY: the environment lock is held and no other thread reads
-        // these variables.
-        unsafe { radarpub::scrub_empty_env::<Args>(KEEP) };
+    #[test]
+    fn unset_env_var_is_not_scrubbed() {
+        let env = fake_env(&[]);
+        assert!(radarpub::empty_env_vars::<Args>(KEEP, env).is_empty());
+    }
 
-        assert!(std::env::var_os("CLUSTERING_EPS").is_none());
-        assert!(std::env::var_os("CLUSTERING").is_none());
-        assert!(std::env::var_os("CONNECT").is_none());
+    #[test]
+    fn kept_env_var_is_not_scrubbed_even_when_empty() {
+        let env = fake_env(&[("CLUSTERING_EPS", ""), ("CLUSTERING", "")]);
+        assert_eq!(
+            radarpub::empty_env_vars::<Args>(&["CLUSTERING_EPS"], env),
+            ["CLUSTERING"]
+        );
+    }
 
-        let args = Args::try_parse_from(["edgefirst-radarpub"])
-            .expect("empty env vars must fall back to the declared defaults");
-        assert_eq!(args.clustering_eps, 1.0);
-        assert!(!args.clustering);
-        assert!(args.connect.is_empty());
+    #[test]
+    fn env_var_not_bound_to_an_argument_is_never_scrubbed() {
+        let env = fake_env(&[("UNRELATED_EMPTY_VAR", ""), ("WINDOW_SIZE", "")]);
+        assert_eq!(radarpub::empty_env_vars::<Args>(KEEP, env), ["WINDOW_SIZE"]);
     }
 }

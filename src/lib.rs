@@ -39,6 +39,39 @@ pub mod net;
 /// Clustering and tracking algorithms
 pub mod clustering;
 
+/// Names of `C`'s env-bound arguments whose value, as reported by `var`, is
+/// present but empty and not listed in `keep`.
+///
+/// Pure: the environment is only read through `var`, so this can be unit
+/// tested with a fake lookup and no process-wide mutation.
+///
+/// # Example
+///
+/// ```
+/// use clap::Parser;
+///
+/// #[derive(Parser)]
+/// struct Args {
+///     #[arg(long, env = "WINDOW_SIZE", default_value = "6")]
+///     window_size: usize,
+/// }
+///
+/// let fake = |name: &str| (name == "WINDOW_SIZE").then(String::new);
+/// assert_eq!(radarpub::empty_env_vars::<Args>(&[], fake), ["WINDOW_SIZE"]);
+/// assert!(radarpub::empty_env_vars::<Args>(&["WINDOW_SIZE"], fake).is_empty());
+/// ```
+pub fn empty_env_vars<C: clap::CommandFactory>(
+    keep: &[&str],
+    var: impl Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    C::command()
+        .get_arguments()
+        .filter_map(|arg| arg.get_env().map(|e| e.to_string_lossy().into_owned()))
+        .filter(|name| !keep.contains(&name.as_str()))
+        .filter(|name| var(name).is_some_and(|v| v.is_empty()))
+        .collect()
+}
+
 /// Treat an empty environment variable as unset, so clap's declared
 /// `default_value` applies instead of failing to parse.
 ///
@@ -74,14 +107,7 @@ pub mod clustering;
 /// let args = Args::parse();
 /// ```
 pub unsafe fn scrub_empty_env<C: clap::CommandFactory>(keep: &[&str]) {
-    for arg in C::command().get_arguments() {
-        let Some(env) = arg.get_env() else { continue };
-        let name = env.to_string_lossy().into_owned();
-        if keep.contains(&name.as_str()) {
-            continue;
-        }
-        if matches!(std::env::var(&name), Ok(v) if v.is_empty()) {
-            std::env::remove_var(&name);
-        }
+    for name in empty_env_vars::<C>(keep, |name| std::env::var(name).ok()) {
+        std::env::remove_var(&name);
     }
 }
