@@ -183,6 +183,16 @@ impl fmt::Display for DetectionSensitivity {
     }
 }
 
+/// Environment variables where an empty value is meaningful and must be
+/// preserved by [`radarpub::scrub_empty_env`] (i.e. the argument has a
+/// non-empty default but `""` is a documented "disable" sentinel).
+///
+/// No radarpub argument uses an empty string as a sentinel: every env-bound
+/// argument with a non-empty default is a number, boolean, enum or frame ID
+/// for which `""` is simply invalid, and the list arguments (`CONNECT`,
+/// `LISTEN`) have no default so scrubbing them yields the same empty list.
+pub const KEEP: &[&str] = &[];
+
 /// Command-line arguments for EdgeFirst Radar Publisher.
 ///
 /// This structure defines all configuration options for the radar node,
@@ -388,6 +398,7 @@ impl From<Args> for Config {
 mod tests {
     use super::*;
     use clap::Parser;
+    use std::collections::HashMap;
 
     fn parse_cli() -> Args {
         Args::parse_from([
@@ -419,5 +430,96 @@ mod tests {
         assert_eq!(args.targets_topic, "radar/targets");
         assert_eq!(args.clusters_topic, "radar/clusters");
         assert_eq!(args.cube_topic, "radar/cube");
+    }
+
+    /// Env-bound arguments with a non-empty default where we have consciously
+    /// decided that an empty value is NOT meaningful (so scrubbing to the
+    /// default is correct).
+    const SCRUB_REVIEWED: &[&str] = &[
+        "CENTER_FREQUENCY",
+        "FREQUENCY_SWEEP",
+        "RANGE_TOGGLE",
+        "DETECTION_SENSITIVITY",
+        "CUBE",
+        "CLUSTERING",
+        "WINDOW_SIZE",
+        "CLUSTERING_EPS",
+        "CLUSTERING_PARAM_SCALE",
+        "CLUSTERING_POINT_LIMIT",
+        "RADAR_TF_VEC",
+        "RADAR_TF_QUAT",
+        "BASE_FRAME_ID",
+        "RADAR_FRAME_ID",
+        "RUST_LOG",
+        "MODE",
+    ];
+
+    #[test]
+    fn every_env_arg_is_either_scrubbable_or_explicitly_kept() {
+        use clap::CommandFactory;
+        for arg in Args::command().get_arguments() {
+            let Some(env) = arg.get_env() else { continue };
+            let name = env.to_string_lossy().into_owned();
+            let has_nonempty_default = arg
+                .get_default_values()
+                .first()
+                .is_some_and(|d| !d.is_empty());
+            if has_nonempty_default && !KEEP.contains(&name.as_str()) {
+                assert!(
+                    SCRUB_REVIEWED.contains(&name.as_str()),
+                    "{name} has a non-empty default; decide whether empty is meaningful \
+                     and add it to KEEP or SCRUB_REVIEWED"
+                );
+            }
+        }
+    }
+
+    /// Fake environment lookup for `empty_env_vars`: tests must never mutate
+    /// the real process environment because libtest runs them on parallel
+    /// threads. The end-to-end scrub is covered by `tests/env_scrub.rs`,
+    /// which runs single-threaded with `harness = false`.
+    fn fake_env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let vars: HashMap<String, String> = vars
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        move |name| vars.get(name).cloned()
+    }
+
+    #[test]
+    fn empty_env_var_is_scrubbed() {
+        // Mirrors an /etc/default/radarpub entry written as KEY="".
+        let env = fake_env(&[("CLUSTERING_EPS", "")]);
+        assert_eq!(
+            radarpub::empty_env_vars::<Args>(KEEP, env),
+            ["CLUSTERING_EPS"]
+        );
+    }
+
+    #[test]
+    fn non_empty_env_var_is_not_scrubbed() {
+        let env = fake_env(&[("CLUSTERING_EPS", "2.5"), ("CLUSTERING", "true")]);
+        assert!(radarpub::empty_env_vars::<Args>(KEEP, env).is_empty());
+    }
+
+    #[test]
+    fn unset_env_var_is_not_scrubbed() {
+        let env = fake_env(&[]);
+        assert!(radarpub::empty_env_vars::<Args>(KEEP, env).is_empty());
+    }
+
+    #[test]
+    fn kept_env_var_is_not_scrubbed_even_when_empty() {
+        let env = fake_env(&[("CLUSTERING_EPS", ""), ("CLUSTERING", "")]);
+        assert_eq!(
+            radarpub::empty_env_vars::<Args>(&["CLUSTERING_EPS"], env),
+            ["CLUSTERING"]
+        );
+    }
+
+    #[test]
+    fn env_var_not_bound_to_an_argument_is_never_scrubbed() {
+        let env = fake_env(&[("UNRELATED_EMPTY_VAR", ""), ("WINDOW_SIZE", "")]);
+        assert_eq!(radarpub::empty_env_vars::<Args>(KEEP, env), ["WINDOW_SIZE"]);
     }
 }
