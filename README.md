@@ -282,3 +282,5 @@ Third-party dependencies and attributions are documented in [NOTICE.md](NOTICE.m
 ---
 
 **Built with ❤️ by Au-Zone Technologies** | **Empowering Edge AI for Autonomous Systems**
+
+<img referrerpolicy="no-referrer" src="https://px.edgefirst.ai/a.png?x-pxid=52944464-f156-4052-9ac5-f61e756c1367" alt="" width="1" height="1" style="position:absolute; width:1px; height:1px; opacity:0; pointer-events:none;" />
