@@ -9,7 +9,9 @@ mod eth;
 mod net;
 
 use args::{Args, CenterFrequency, DetectionSensitivity, FrequencySweep, RangeToggle};
-use can::{read_message, read_status, write_parameter, Parameter, Status, Target};
+use can::{
+    enable_rx_timestamps, read_message, read_status, write_parameter, Parameter, Status, Target,
+};
 use clap::Parser;
 use clustering::Clustering;
 use common::TimestampError;
@@ -20,14 +22,14 @@ use edgefirst_schemas::{
     geometry_msgs::{Quaternion, Transform, TransformStamped, Vector3},
     sensor_msgs::{PointCloud2, PointFieldView},
 };
-use eth::{RadarCube, RadarCubeReader, SMS_PACKET_SIZE};
+use eth::{RadarCube, RadarCubeReader};
 use kanal::{AsyncReceiver, AsyncSender};
 use socketcan::tokio::CanSocket;
 use std::{
     collections::VecDeque,
     f32::consts::PI,
     thread::{self},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tracing::{error, event, info, info_span, instrument, warn, Instrument, Level};
 use tracing_subscriber::{layer::SubscriberExt as _, Layer as _, Registry};
@@ -35,6 +37,7 @@ use tracy_client::{frame_mark, plot, secondary_frame_mark};
 use zenoh::{
     bytes::{Encoding, ZBytes},
     qos::{CongestionControl, Priority},
+    time::{Timestamp, TimestampId, NTP64},
     Session,
 };
 
@@ -96,6 +99,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let session = zenoh::open(args.clone()).await.unwrap();
     let can = CanSocket::open(&args.can)?;
+    if let Err(err) = enable_rx_timestamps(&can) {
+        warn!(
+            "{}: kernel receive timestamps unavailable, using the clock after each receive: {}",
+            args.can, err
+        );
+    }
+    info!(
+        "sensor latency: targets={} ns cube={} ns",
+        args.targets_latency, args.cube_latency
+    );
 
     let software_generation = read_status(&can, Status::SoftwareGeneration).await.unwrap();
     let major_version = read_status(&can, Status::MajorVersion).await.unwrap();
@@ -138,55 +151,55 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let tf_session = session.clone();
-    let tf_stamp = get_stamp().unwrap_or_else(|| {
-        warn!("tf_static: system clock unavailable, using epoch-zero timestamp");
-        Time { sec: 0, nanosec: 0 }
-    });
-    let tf_msg = TransformStamped::builder()
-        .stamp(tf_stamp)
-        .frame_id(args.base_frame_id.clone())
-        .child_frame_id(args.radar_frame_id.clone())
-        .transform(Transform {
-            translation: Vector3 {
-                x: args.radar_tf_vec[0],
-                y: args.radar_tf_vec[1],
-                z: args.radar_tf_vec[2],
-            },
-            rotation: Quaternion {
-                x: args.radar_tf_quat[0],
-                y: args.radar_tf_quat[1],
-                z: args.radar_tf_quat[2],
-                w: args.radar_tf_quat[3],
-            },
-        })
-        .build()
-        .unwrap();
-    let tf_msg = ZBytes::from(tf_msg.into_cdr());
+    let tf_args = args.clone();
     let tf_enc = Encoding::APPLICATION_CDR.with_schema("geometry_msgs/msg/TransformStamped");
-    let tf_task = tokio::spawn(async move { tf_static(tf_session, tf_msg, tf_enc).await.unwrap() });
-    std::mem::drop(tf_task);
-
-    let info_stamp = get_stamp().unwrap_or_else(|| {
-        warn!("radar_info: system clock unavailable, using epoch-zero timestamp");
-        Time { sec: 0, nanosec: 0 }
+    let tf_task = tokio::spawn(async move {
+        republish(tf_session, "tf_static", tf_enc, |stamp| {
+            let msg = TransformStamped::builder()
+                .stamp(stamp)
+                .frame_id(tf_args.base_frame_id.clone())
+                .child_frame_id(tf_args.radar_frame_id.clone())
+                .transform(Transform {
+                    translation: Vector3 {
+                        x: tf_args.radar_tf_vec[0],
+                        y: tf_args.radar_tf_vec[1],
+                        z: tf_args.radar_tf_vec[2],
+                    },
+                    rotation: Quaternion {
+                        x: tf_args.radar_tf_quat[0],
+                        y: tf_args.radar_tf_quat[1],
+                        z: tf_args.radar_tf_quat[2],
+                        w: tf_args.radar_tf_quat[3],
+                    },
+                })
+                .build()?;
+            Ok(ZBytes::from(msg.into_cdr()))
+        })
+        .await
+        .unwrap()
     });
-    let info_msg = RadarInfo::builder()
-        .stamp(info_stamp)
-        .frame_id(args.base_frame_id.clone())
-        .center_frequency(args.center_frequency.to_string())
-        .frequency_sweep(args.frequency_sweep.to_string())
-        .range_toggle(args.range_toggle.to_string())
-        .detection_sensitivity(args.detection_sensitivity.to_string())
-        .cube(args.cube)
-        .build()
-        .unwrap();
+    std::mem::drop(tf_task);
 
     let info_session = session.clone();
-    let info_msg = ZBytes::from(info_msg.into_cdr());
+    let info_args = args.clone();
     let info_enc = Encoding::APPLICATION_CDR.with_schema("edgefirst_msgs/msg/RadarInfo");
-    let tf_task =
-        tokio::spawn(async move { radar_info(info_session, info_msg, info_enc).await.unwrap() });
-    std::mem::drop(tf_task);
+    let info_task = tokio::spawn(async move {
+        republish(info_session, "radar/info", info_enc, |stamp| {
+            let msg = RadarInfo::builder()
+                .stamp(stamp)
+                .frame_id(info_args.base_frame_id.clone())
+                .center_frequency(info_args.center_frequency.to_string())
+                .frequency_sweep(info_args.frequency_sweep.to_string())
+                .range_toggle(info_args.range_toggle.to_string())
+                .detection_sensitivity(info_args.detection_sensitivity.to_string())
+                .cube(info_args.cube)
+                .build()?;
+            Ok(ZBytes::from(msg.into_cdr()))
+        })
+        .await
+        .unwrap()
+    });
+    std::mem::drop(info_task);
 
     let clustering = if args.clustering {
         let session = session.clone();
@@ -213,6 +226,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let session = session.clone();
         let topic = args.cube_topic.clone();
         let frame_id = args.radar_frame_id.clone();
+        let latency = Duration::from_nanos(args.cube_latency);
 
         thread::Builder::new()
             .name("cube".to_string())
@@ -221,7 +235,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .enable_all()
                     .build()
                     .unwrap()
-                    .block_on(cube_loop(session, topic, frame_id, args.tracy))
+                    .block_on(cube_loop(session, topic, frame_id, latency, args.tracy))
                     .unwrap();
             })?;
     }
@@ -236,8 +250,10 @@ async fn stream(
     can: CanSocket,
     session: Session,
     args: Args,
-    clustering: Option<AsyncSender<Vec<Target>>>,
+    clustering: Option<AsyncSender<(Time, Vec<Target>)>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let ts_id = timestamp_id(&session);
+    let latency = Duration::from_nanos(args.targets_latency);
     let targets_publisher = session
         .declare_publisher(args.targets_topic.clone())
         .priority(Priority::DataHigh)
@@ -252,18 +268,21 @@ async fn stream(
                 let targets = &frame.targets[..frame.header.n_targets];
                 args.tracy.then(|| plot!("targets", targets.len() as f64));
 
+                let stamp =
+                    stamp_or_epoch(common::acquisition_stamp(frame.rx_time, latency), "targets");
+
                 if let Some(tx) = &clustering {
-                    tx.send(targets.to_vec()).await.unwrap();
+                    tx.send((stamp, targets.to_vec())).await.unwrap();
                 }
 
-                let (msg, enc) = format_targets(targets, args.mirror, &args.radar_frame_id)?;
+                let (msg, enc) = format_targets(targets, stamp, args.mirror, &args.radar_frame_id)?;
 
                 let span = info_span!("targets_publish");
                 async {
                     match targets_publisher
                         .put(msg)
                         .encoding(enc)
-                        .timestamp(session.new_timestamp())
+                        .timestamp(zenoh_timestamp(ts_id, &stamp))
                         .await
                     {
                         Ok(_) => {}
@@ -282,6 +301,7 @@ async fn stream(
 #[instrument(skip_all)]
 fn format_targets(
     targets: &[Target],
+    stamp: Time,
     mirror: bool,
     frame_id: &str,
 ) -> Result<(ZBytes, Encoding), Box<dyn std::error::Error>> {
@@ -346,10 +366,6 @@ fn format_targets(
         },
     ];
 
-    let stamp = get_stamp().unwrap_or_else(|| {
-        warn!("targets: system clock unavailable, using epoch-zero timestamp");
-        Time { sec: 0, nanosec: 0 }
-    });
     let msg = PointCloud2::builder()
         .stamp(stamp)
         .frame_id(frame_id)
@@ -372,8 +388,12 @@ fn format_targets(
 async fn clustering_task(
     session: Session,
     args: Args,
-    rx: AsyncReceiver<Vec<Target>>,
+    rx: AsyncReceiver<(Time, Vec<Target>)>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let ts_id = timestamp_id(&session);
+    // Track lifetimes run on the monotonic clock so a wall-clock step can
+    // neither stall the tracker nor expire every track.
+    let tracker_epoch = Instant::now();
     let publisher = session
         .declare_publisher(&args.clusters_topic)
         .priority(Priority::DataHigh)
@@ -389,10 +409,8 @@ async fn clustering_task(
     );
 
     loop {
-        let targets: Vec<Target> = rx.recv().await.unwrap();
-        let Some(time) = get_stamp() else {
-            continue;
-        };
+        let (time, targets): (Time, Vec<Target>) = rx.recv().await.unwrap();
+        let tracker_time = tracker_epoch.elapsed().as_nanos() as u64;
 
         let (targets, clusters) = info_span!("clustering").in_scope(|| {
             if window.len() == args.window_size {
@@ -419,7 +437,7 @@ async fn clustering_task(
                 })
                 .collect();
             let clusters = clustering
-                .cluster(dbscantargets, time.to_nanos().unwrap_or(0))
+                .cluster(dbscantargets, tracker_time)
                 .into_iter()
                 .map(|v| v[4]);
 
@@ -439,7 +457,7 @@ async fn clustering_task(
             match publisher
                 .put(msg)
                 .encoding(enc)
-                .timestamp(session.new_timestamp())
+                .timestamp(zenoh_timestamp(ts_id, &time))
                 .await
             {
                 Ok(_) => {}
@@ -551,8 +569,10 @@ async fn cube_loop(
     session: Session,
     topic: String,
     frame_id: String,
+    latency: Duration,
     tracy: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let ts_id = timestamp_id(&session);
     let cube_publisher = match session
         .declare_publisher(&topic)
         .priority(Priority::DataHigh)
@@ -600,14 +620,10 @@ async fn cube_loop(
             }
         };
 
-        let n_msg = msg.len() / SMS_PACKET_SIZE;
+        event!(Level::TRACE, event = "port5", n_msg = msg.rx_time.len());
 
-        event!(Level::TRACE, event = "port5", n_msg = n_msg);
-
-        for i in 0..n_msg {
-            let begin = i * SMS_PACKET_SIZE;
-            let end = begin + SMS_PACKET_SIZE;
-            let cubemsg = reader.read(&msg[begin..end]);
+        for (rx_time, packet) in msg.iter() {
+            let cubemsg = reader.read(packet, rx_time);
 
             match cubemsg {
                 Ok(Some(cubemsg)) => {
@@ -617,13 +633,17 @@ async fn cube_loop(
                     });
 
                     if cubemsg.missing_data == 0 {
-                        let (msg, enc) = format_cube(cubemsg, &frame_id).unwrap();
+                        let stamp = stamp_or_epoch(
+                            common::acquisition_stamp(cubemsg.rx_time, latency),
+                            "cube",
+                        );
+                        let (msg, enc) = format_cube(cubemsg, stamp, &frame_id).unwrap();
                         let span = info_span!("cube_publish");
                         async {
                             match cube_publisher
                                 .put(msg)
                                 .encoding(enc)
-                                .timestamp(session.new_timestamp())
+                                .timestamp(zenoh_timestamp(ts_id, &stamp))
                                 .await
                             {
                                 Ok(_) => {}
@@ -650,6 +670,7 @@ async fn cube_loop(
 #[instrument(skip_all, fields(shape = cubemsg.data.shape().iter().map(|s| s.to_string()).collect::<Vec<_>>().join(" ")))]
 fn format_cube(
     cubemsg: RadarCube,
+    stamp: Time,
     frame_id: &str,
 ) -> Result<(ZBytes, Encoding), Box<dyn std::error::Error>> {
     let layout = [
@@ -673,24 +694,6 @@ fn format_cube(
     let data2 =
         unsafe { Vec::from_raw_parts(data.as_ptr() as *mut i16, data.len() * 2, data.len() * 2) };
     std::mem::forget(data);
-
-    let stamp = if cubemsg.timestamp > 0 {
-        match common::stamp_from_micros(cubemsg.timestamp) {
-            Ok(stamp) => stamp,
-            Err(_) => {
-                warn!("RadarCube: sensor timestamp exceeds i32 range (Y2038), saturating");
-                Time {
-                    sec: i32::MAX,
-                    nanosec: 999_999_999,
-                }
-            }
-        }
-    } else {
-        get_stamp().unwrap_or_else(|| {
-            warn!("RadarCube: no sensor timestamp and wall-clock unavailable, using epoch-zero");
-            Time { sec: 0, nanosec: 0 }
-        })
-    };
 
     let scales = [
         1.0,
@@ -728,22 +731,30 @@ fn transform_xyz(range: f32, azimuth: f32, elevation: f32, mirror: bool) -> [f32
     }
 }
 
-async fn tf_static(
+/// Publishes a metadata message once per second, re-stamped with the
+/// current wall-clock time at each republish.
+async fn republish<F>(
     session: Session,
-    msg: ZBytes,
+    topic: &'static str,
     enc: Encoding,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let topic = "tf_static".to_string();
+    encode: F,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    F: Fn(Time) -> Result<ZBytes, Box<dyn std::error::Error + Send + Sync>>,
+{
+    let ts_id = timestamp_id(&session);
     let mut interval = tokio::time::interval(Duration::from_secs(1));
 
     loop {
         interval.tick().await;
-        let span = info_span!("tf_static_publish");
+        let stamp = stamp_or_epoch(common::timestamp().map(Time::from_nanos), topic);
+        let msg = encode(stamp)?;
+        let span = info_span!("republish", topic);
         async {
             session
-                .put(&topic, msg.clone())
+                .put(topic, msg)
                 .encoding(enc.clone())
-                .timestamp(session.new_timestamp())
+                .timestamp(zenoh_timestamp(ts_id, &stamp))
                 .await
         }
         .instrument(span)
@@ -751,42 +762,84 @@ async fn tf_static(
     }
 }
 
-async fn radar_info(
-    session: Session,
-    msg: ZBytes,
-    enc: Encoding,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let topic = "radar/info".to_string();
-    let mut interval = tokio::time::interval(Duration::from_secs(1));
-
-    loop {
-        interval.tick().await;
-        let span = info_span!("radar_info_publish");
-        async {
-            session
-                .put(&topic, msg.clone())
-                .encoding(enc.clone())
-                .timestamp(session.new_timestamp())
-                .await
-        }
-        .instrument(span)
-        .await?;
-    }
-}
-
-fn get_stamp() -> Option<Time> {
-    match common::timestamp() {
-        Ok(ns) => Some(Time::from_nanos(ns)),
+/// Converts a stamp result to `Time`, saturating past Y2038 and falling back
+/// to the epoch when the clock is unusable.
+fn stamp_or_epoch(stamp: Result<Time, TimestampError>, topic: &str) -> Time {
+    match stamp {
+        Ok(stamp) => stamp,
         Err(TimestampError::TimestampOverflow) => {
-            warn!("Timestamp overflow: system clock exceeds i32 range (Y2038), saturating");
-            Some(Time {
+            warn!("{topic}: timestamp exceeds i32 range (Y2038), saturating");
+            Time {
                 sec: i32::MAX,
                 nanosec: 999_999_999,
-            })
+            }
         }
         Err(e) => {
-            warn!("Failed to get timestamp: {}", e);
-            None
+            warn!("{topic}: invalid timestamp, using epoch-zero: {e}");
+            Time { sec: 0, nanosec: 0 }
         }
+    }
+}
+
+/// Returns the Zenoh timestamp source ID of the session.
+fn timestamp_id(session: &Session) -> TimestampId {
+    *session.new_timestamp().get_id()
+}
+
+/// Builds the Zenoh sample timestamp for a message stamp so the sample
+/// timestamp and `header.stamp` denote the same instant. NTP64 quantizes the
+/// fraction to 2^-32 s (about 0.23 ns), so the round trip is exact only to
+/// within a nanosecond.
+fn zenoh_timestamp(id: TimestampId, stamp: &Time) -> Timestamp {
+    let time = Duration::new(stamp.sec.max(0) as u64, stamp.nanosec);
+    Timestamp::new(NTP64::from(time), id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn round_trip(stamp: Time) -> Duration {
+        zenoh_timestamp(TimestampId::rand(), &stamp)
+            .get_time()
+            .to_duration()
+    }
+
+    #[test]
+    fn test_zenoh_timestamp_matches_stamp() {
+        for nanosec in [0, 1, 123_456_789, 500_000_000, 999_999_999] {
+            let stamp = Time {
+                sec: 1_790_000_000,
+                nanosec,
+            };
+            let expected = Duration::new(stamp.sec as u64, stamp.nanosec);
+            let actual = round_trip(stamp);
+            let error = actual.abs_diff(expected);
+            assert!(error <= Duration::from_nanos(2), "{nanosec}: {error:?}");
+        }
+    }
+
+    #[test]
+    fn test_zenoh_timestamp_negative_stamp_is_epoch() {
+        let stamp = Time {
+            sec: -1,
+            nanosec: 0,
+        };
+        assert_eq!(round_trip(stamp), Duration::ZERO);
+    }
+
+    #[test]
+    fn test_stamp_or_epoch() {
+        let stamp = Time { sec: 5, nanosec: 6 };
+        let ok = stamp_or_epoch(Ok(stamp), "test");
+        assert_eq!((ok.sec, ok.nanosec), (5, 6));
+
+        let overflow = stamp_or_epoch(Err(TimestampError::TimestampOverflow), "test");
+        assert_eq!((overflow.sec, overflow.nanosec), (i32::MAX, 999_999_999));
+
+        let pre_epoch = std::time::UNIX_EPOCH - Duration::from_secs(1);
+        let err = common::stamp_from_system_time(pre_epoch);
+        let zero = stamp_or_epoch(err, "test");
+        assert_eq!((zero.sec, zero.nanosec), (0, 0));
     }
 }

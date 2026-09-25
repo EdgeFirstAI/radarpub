@@ -109,6 +109,8 @@ wildcards such as `*/radar/**` (any publisher) rather than their own hostname.
 Topic names can be overridden with `--targets-topic`, `--clusters-topic`, and
 `--cube-topic`.
 
+**Timestamps:** Every message's `header.stamp` is the estimated acquisition time in host `CLOCK_REALTIME`, and the Zenoh sample timestamp carries the same instant. Targets and cube are stamped from the kernel receive time of their first CAN frame or UDP packet, minus a configurable sensor latency (`TARGETS_LATENCY`, `CUBE_LATENCY`, nanoseconds, default 110 ms). See [ARCHITECTURE.md](ARCHITECTURE.md#timestamps).
+
 **Migration from v1.6.x:** Replace subscriptions to `rt/radar/…` with
 `{hostname}/radar/…` or the wildcard form `*/radar/…`. The `rt/` prefix and
 `--prefix` flag are no longer used.

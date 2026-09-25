@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `TARGETS_LATENCY` and `CUBE_LATENCY` (`--targets-latency`, `--cube-latency`): sensor processing latency in nanoseconds subtracted from the receive time to estimate acquisition time, default 110 ms (EDGEAI-1942)
+
+### Changed
+
+- The Zenoh sample timestamp equals `header.stamp` on `radar/targets`, `radar/clusters`, `radar/cube`, `radar/info` and `tf_static` (EDGEAI-1942)
+- `radar/targets` is stamped from the kernel receive time of the first CAN frame of the target list instead of the time parsing finished (EDGEAI-1942)
+- `radar/cube` `header.stamp` is host time from the kernel receive time of the start-of-frame packet instead of the radar's power-on clock; the sensor time remains in `RadarCube.timestamp` (EDGEAI-1942)
+- `radar/clusters` uses the stamp of the newest target list instead of reading the clock again (EDGEAI-1942)
+- `radar/info` and `tf_static` are re-stamped at each republish instead of keeping the startup time (EDGEAI-1942)
+- Track lifetimes run on `CLOCK_MONOTONIC`, so wall-clock steps no longer affect tracking (EDGEAI-1942)
+- Port 50063 uses the same batched `recvmmsg` receiver as port 50005 and waits on socket readiness (EDGEAI-1942)
+
+### Fixed
+
+- The 2 MiB UDP receive buffer is requested with `SO_RCVBUFFORCE`, falling back to `SO_RCVBUF`; the default `net.core.rmem_max` silently capped it at 208 KiB, dropping radar cube packets. A warning is logged when the granted size is smaller than requested (EDGEAI-1942)
+- Rustdoc build with `-D warnings` failed on an unescaped `Complex<i16>` in the `RadarCubeReader` documentation
+- Documentation referred to the removed `drvegrd-rerun` binary; it now points to the `radar_viewer` and `zenoh_viewer` examples
+
+### Removed
+
+- Orphaned `src/rerun.rs`, which no build target compiled since the viewers moved to `examples/` in 1.6.0
+
 ## [1.7.2] - 2026-09-07
 
 Patch release for EDGEAI-1094. Argument parsing only; no wire-format or

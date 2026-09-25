@@ -20,7 +20,7 @@ use std::{fs::File, net::Ipv4Addr, thread};
 
 // Import from radarpub library
 use radarpub::{
-    eth::{RadarCube, RadarCubeReader, SMSError, TransportHeaderSlice, SMS_PACKET_SIZE},
+    eth::{RadarCube, RadarCubeReader, SMSError, TransportHeaderSlice},
     net,
 };
 
@@ -229,13 +229,8 @@ async fn udp_loop(
             }
         };
 
-        let n_msg = msg.len() / SMS_PACKET_SIZE;
-
-        for i in 0..n_msg {
-            let start = i * SMS_PACKET_SIZE;
-            let end = start + SMS_PACKET_SIZE;
-
-            match reader.read(&msg[start..end]) {
+        for (rx_time, packet) in msg.iter() {
+            match reader.read(packet, rx_time) {
                 Ok(Some(cubemsg)) => {
                     let badcount = cubemsg
                         .data
@@ -319,12 +314,14 @@ fn pcap_loop(
     let mut reader = RadarCubeReader::default();
 
     for cap in pcarp::Capture::new(file) {
-        match etherparse::SlicedPacket::from_ethernet(&cap.unwrap().data) {
+        let cap = cap.unwrap();
+        let rx_time = cap.timestamp.unwrap_or(std::time::UNIX_EPOCH);
+        match etherparse::SlicedPacket::from_ethernet(&cap.data) {
             Err(err) => error!("Err {:?}", err),
             Ok(pkt) => {
                 if let Some(etherparse::TransportSlice::Udp(udp)) = pkt.transport {
                     if TransportHeaderSlice::from_slice(udp.payload()).is_ok() {
-                        match reader.read(udp.payload()) {
+                        match reader.read(udp.payload(), rx_time) {
                             Ok(Some(cubemsg)) => {
                                 let cube = format_cube(&cubemsg, numpy)?;
 
@@ -342,7 +339,7 @@ fn pcap_loop(
                     }
                 }
             }
-        }
+        };
     }
 
     Ok(())

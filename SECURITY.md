@@ -300,7 +300,7 @@ This security policy applies to:
 
 - ✅ RadarPub core components (radarpub binary)
 - ✅ Control utilities (drvegrdctl)
-- ✅ Visualization tools (drvegrd-rerun)
+- ✅ Visualization examples (radar_viewer, zenoh_viewer)
 - ✅ Published release artifacts
 
 This policy does NOT cover:
@@ -326,5 +326,5 @@ For vulnerabilities in the broader EdgeFirst ecosystem, please refer to the appr
 
 ---
 
-**Last Updated**: 2025-01-15
+**Last Updated**: 2026-09-24
 **Policy Owner**: Au-Zone Technologies Security Team

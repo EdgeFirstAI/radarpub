@@ -3,7 +3,13 @@
 
 use ndarray::{Array4, ArrayView4, Axis};
 use num::Complex;
-use std::{cmp::min, fmt, num::Wrapping, vec};
+use std::{
+    cmp::min,
+    fmt,
+    num::Wrapping,
+    time::{SystemTime, UNIX_EPOCH},
+    vec,
+};
 use tracing::instrument;
 
 /// Fixed size size of the SMS UDP packets.
@@ -894,8 +900,10 @@ impl<'a> BinPropertiesSlice<'a> {
 /// from Smart Micro DRVEGRD radar.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RadarCube {
-    /// Unix timestamp (microseconds)
+    /// Sensor port-header timestamp: microseconds since sensor power-on
     pub timestamp: u64,
+    /// Host receive time (`CLOCK_REALTIME`) of the start-of-frame packet
+    pub rx_time: SystemTime,
     /// Frame sequence counter
     pub frame_counter: u32,
     /// UDP packets received
@@ -928,6 +936,7 @@ impl fmt::Display for RadarCube {
 #[derive(Debug)]
 pub struct RadarCubeReader {
     timestamp: u64,
+    rx_time: SystemTime,
     frame_counter: u32,
     first_message: Wrapping<u16>,
     message_counter: Wrapping<u16>,
@@ -952,6 +961,7 @@ impl RadarCubeReader {
     pub fn new() -> RadarCubeReader {
         RadarCubeReader {
             timestamp: 0,
+            rx_time: UNIX_EPOCH,
             frame_counter: 0,
             first_message: Wrapping(0),
             message_counter: Wrapping(0),
@@ -971,8 +981,10 @@ impl RadarCubeReader {
         &mut self,
         transport: &TransportHeaderSlice,
         debug_header: &DebugHeaderSlice,
+        rx_time: SystemTime,
     ) -> Result<Option<RadarCube>, SMSError> {
         *self = Self::default();
+        self.rx_time = rx_time;
         self.timestamp = transport.port_header()?.timestamp();
         self.frame_counter = debug_header.frame_counter();
         self.first_message = transport.message_counter().unwrap();
@@ -1037,6 +1049,7 @@ impl RadarCubeReader {
 
         let cube = RadarCube {
             timestamp: self.timestamp,
+            rx_time: self.rx_time,
             packets_captured: self.packets_captured.0,
             packets_skipped: self.packets_skipped.0,
             frame_counter: self.frame_counter,
@@ -1139,18 +1152,24 @@ impl RadarCubeReader {
     ///
     /// # Arguments
     /// * `slice` - UDP packet payload bytes
+    /// * `rx_time` - Host receive time of the packet; the cube reports the
+    ///   receive time of its start-of-frame packet
     ///
     /// # Returns
     /// `Some(RadarCube)` when frame complete, `None` for partial frames
     ///
     /// # Errors
     /// Returns SMSError on protocol violations or missing data
-    pub fn read(&mut self, slice: &[u8]) -> Result<Option<RadarCube>, SMSError> {
+    pub fn read(
+        &mut self,
+        slice: &[u8],
+        rx_time: SystemTime,
+    ) -> Result<Option<RadarCube>, SMSError> {
         let transport = TransportHeaderSlice::from_slice(slice)?;
         let debug_header = transport.debug_header()?;
 
         match debug_header.flags() {
-            DebugHeader::START_OF_FRAME => self.start_of_frame(&transport, &debug_header),
+            DebugHeader::START_OF_FRAME => self.start_of_frame(&transport, &debug_header, rx_time),
             DebugHeader::FRAME_FOOTER => self.frame_footer(&transport, &debug_header),
             DebugHeader::FRAME_DATA | DebugHeader::END_OF_DATA => {
                 self.frame_data(&transport, &debug_header)
@@ -1177,7 +1196,7 @@ impl RadarCubeReader {
 
     /// Returns the radar cube volume or the error CubeHeaderMissing if the cube
     /// header is not present.  The volume is in the form of elements, each of
-    /// which is the complex power of the radar signal as a Complex<i16>.
+    /// which is the complex power of the radar signal as a `Complex<i16>`.
     pub fn volume(&self) -> Result<usize, SMSError> {
         self.shape().map(|shape| shape.iter().product())
     }
@@ -1206,7 +1225,8 @@ mod tests {
         let mut reader = RadarCubeReader::default();
 
         for cap in Capture::new(file) {
-            match SlicedPacket::from_ethernet(&cap.unwrap().data) {
+            let cap = cap.unwrap();
+            match SlicedPacket::from_ethernet(&cap.data) {
                 Err(err) => error!("Err {:?}", err),
                 Ok(pkt) => {
                     if let Some(TransportSlice::Udp(udp)) = pkt.transport {
@@ -1236,7 +1256,8 @@ mod tests {
                             // }
                         }
 
-                        match reader.read(udp.payload()) {
+                        let rx_time = cap.timestamp.unwrap_or(UNIX_EPOCH);
+                        match reader.read(udp.payload(), rx_time) {
                             Ok(Some(cube)) => {
                                 println!(
                                     "cube shape: {:?} size: {}",
@@ -1252,7 +1273,7 @@ mod tests {
                         }
                     }
                 }
-            }
+            };
         }
 
         assert_eq!(first_frame, Some(office_3_first_frame));

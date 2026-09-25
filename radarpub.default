@@ -90,6 +90,20 @@ CLUSTERING_POINT_LIMIT="5"
 MIRROR="false"
 
 # ---------------------------------------------------------------------------
+# Sensor Latency
+# ---------------------------------------------------------------------------
+# Processing latency of the radar in nanoseconds, subtracted from the host
+# receive time of each measurement to estimate its acquisition time. The
+# default is two 55 ms radar cycles, from the datasheet processing latency
+# of 2 to 4 cycles.
+
+# Target list latency, applied to radar/targets and radar/clusters.
+TARGETS_LATENCY="110000000"
+
+# Radar cube latency, applied to radar/cube.
+CUBE_LATENCY="110000000"
+
+# ---------------------------------------------------------------------------
 # Radar Transform (TF)
 # ---------------------------------------------------------------------------
 # Static transform from the robot base_link frame to the radar frame,

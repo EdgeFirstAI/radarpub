@@ -4,8 +4,8 @@
 
 **Organization Standards:** See [05-copilot-instructions.md](https://github.com/au-zone/sps) for Au-Zone universal rules
 
-**Version:** 2.0
-**Last Updated:** 2025-11-24
+**Version:** 2.1
+**Last Updated:** 2026-09-24
 
 ---
 
@@ -214,16 +214,18 @@ fn test_edge_cases() {
 src/
 ├── radarpub.rs       # Main entry point for radar publisher
 ├── drvegrdctl.rs     # Radar configuration utility
-├── rerun.rs          # Visualization tool for PCAP playback
 ├── args.rs           # Command-line argument parsing
 ├── can.rs            # CAN interface and DRVEGRD protocol
 ├── eth.rs            # Ethernet/UDP radar cube reception
-├── net.rs            # Network utilities
+├── net.rs            # UDP reception with kernel receive timestamps
 ├── common.rs         # Shared types and utilities
 └── clustering/       # Target clustering and tracking
     ├── mod.rs        # DBSCAN clustering
     ├── kalman.rs     # Kalman filter
     └── tracker.rs    # Multi-target tracking
+examples/
+├── radar_viewer.rs   # Rerun viewer for live radar or PCAP playback
+└── zenoh_viewer.rs   # Rerun viewer for radarpub Zenoh topics
 ```
 
 ### Build Commands
@@ -238,7 +240,7 @@ cargo build --release
 # Build all binaries
 cargo build --release --features "can,zenoh"
 cargo build --release --bin drvegrdctl --features "can"
-cargo build --release --bin drvegrd-rerun --features "rerun"
+cargo build --release --examples --features "rerun,zenoh"
 
 # Cross-compile for ARM64 using cross
 cross build --target aarch64-unknown-linux-gnu --release
@@ -270,9 +272,13 @@ make pre-release
 
 **Binary targets:**
 
-- `radarpub` - Main radar publisher node (requires: can, zenoh)
+- `edgefirst-radarpub` - Main radar publisher node (requires: can, zenoh)
 - `drvegrdctl` - Radar configuration utility (requires: can)
-- `drvegrd-rerun` - Visualization tool for PCAP playback (requires: rerun)
+
+**Examples:**
+
+- `radar_viewer` - Rerun viewer for live radar or PCAP playback (requires: rerun)
+- `zenoh_viewer` - Rerun viewer for radarpub Zenoh topics (requires: rerun, zenoh)
 
 ### Performance Targets
 
@@ -372,6 +378,6 @@ RADAR_CAN_INTERFACE=vcan0 cargo test
 ---
 
 **Process docs:** See [Au-Zone SPS repository](https://github.com/au-zone/sps) 00-README through 11-cicd-pipelines
-**v2.0** | 2025-11-24 | sebastien@au-zone.com
+**v2.1** | 2026-09-24 | sebastien@au-zone.com
 
 *This file helps AI assistants contribute effectively to RadarPub while maintaining quality, security, and consistency.*

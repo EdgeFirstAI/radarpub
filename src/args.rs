@@ -267,6 +267,20 @@ pub struct Args {
     #[arg(long, env = "MIRROR")]
     pub mirror: bool,
 
+    /// Target list processing latency in nanoseconds, subtracted from the
+    /// host receive time of the target list header to estimate the
+    /// acquisition time. The default is two 55 ms radar cycles, from the
+    /// DRVEGRD datasheet processing latency of 2 to 4 cycles.
+    #[arg(long, env = "TARGETS_LATENCY", default_value = "110000000")]
+    pub targets_latency: u64,
+
+    /// Radar cube processing latency in nanoseconds, subtracted from the
+    /// host receive time of the cube's start-of-frame packet to estimate the
+    /// acquisition time. The default is two 55 ms radar cycles, from the
+    /// DRVEGRD datasheet processing latency of 2 to 4 cycles.
+    #[arg(long, env = "CUBE_LATENCY", default_value = "110000000")]
+    pub cube_latency: u64,
+
     /// CAN device connected to radar
     #[arg(long, default_value = "can0")]
     pub can: String,
@@ -446,6 +460,8 @@ mod tests {
         "CLUSTERING_EPS",
         "CLUSTERING_PARAM_SCALE",
         "CLUSTERING_POINT_LIMIT",
+        "TARGETS_LATENCY",
+        "CUBE_LATENCY",
         "RADAR_TF_VEC",
         "RADAR_TF_QUAT",
         "BASE_FRAME_ID",
