@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Minor release (1.8.0). The `eth` and `net` library signatures change without compatibility shims; radarpub ships as an application and these modules are internal to its binaries and examples.
+
 ### Added
 
 - `TARGETS_LATENCY` and `CUBE_LATENCY` (`--targets-latency`, `--cube-latency`): sensor processing latency in nanoseconds subtracted from the receive time to estimate acquisition time, default 110 ms (EDGEAI-1942)
@@ -20,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `radar/info` and `tf_static` are re-stamped at each republish instead of keeping the startup time (EDGEAI-1942)
 - Track lifetimes run on `CLOCK_MONOTONIC`, so wall-clock steps no longer affect tracking (EDGEAI-1942)
 - Port 50063 uses the same batched `recvmmsg` receiver as port 50005 and waits on socket readiness (EDGEAI-1942)
+- Library API: `net::port5` and `net::port63` send `net::Datagrams` (packets with per-packet receive times) instead of `Vec<u8>`; `eth::RadarCubeReader::read` takes the packet receive time; `eth::RadarCube` and `can::Frame` carry `rx_time` (EDGEAI-1942)
 
 ### Fixed
 
