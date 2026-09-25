@@ -102,9 +102,9 @@ cargo run --bin drvegrdctl --features "can" -- \
   --can-interface vcan0 \
   status
 
-# Visualization tool (PCAP replay)
-cargo run --bin drvegrd-rerun --features "rerun" -- \
-  --pcap-file testdata/radar_capture.pcap
+# Visualization example (PCAP replay)
+cargo run --example radar_viewer --features "rerun" -- \
+  testdata/radar_capture.pcap --viewer
 ```
 
 ## Contribution Process

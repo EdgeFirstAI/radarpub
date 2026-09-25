@@ -1,7 +1,7 @@
 # RadarPub Architecture
 
-**Version:** 1.0.0
-**Last Updated:** 2025-01-25
+**Version:** 1.1.0
+**Last Updated:** 2026-09-24
 **Audience:** Developers, system integrators, technical contributors
 
 This document describes the internal architecture of RadarPub: threading model, protocol implementations, data flow, and integration points.
@@ -14,12 +14,13 @@ This document describes the internal architecture of RadarPub: threading model, 
 2. [Component Architecture](#component-architecture)
 3. [Threading Model](#threading-model)
 4. [Data Flow](#data-flow)
-5. [Protocol Implementations](#protocol-implementations)
-6. [Signal Processing](#signal-processing)
-7. [Zenoh Integration](#zenoh-integration)
-8. [Message Formats](#message-formats)
-9. [Tracy Profiling](#tracy-profiling)
-10. [Error Handling](#error-handling)
+5. [Timestamps](#timestamps)
+6. [Protocol Implementations](#protocol-implementations)
+7. [Signal Processing](#signal-processing)
+8. [Zenoh Integration](#zenoh-integration)
+9. [Message Formats](#message-formats)
+10. [Tracy Profiling](#tracy-profiling)
+11. [Error Handling](#error-handling)
 
 ---
 
@@ -105,24 +106,27 @@ src/
 ├── radarpub.rs          # Main application entry point, async runtime
 ├── can.rs               # CAN interface and DRVEGRD UATv4 protocol
 ├── eth.rs               # Ethernet/UDP interface and SMS protocol
-├── net.rs               # Network socket management and optimizations
+├── net.rs               # UDP reception with kernel receive timestamps
 ├── args.rs              # CLI argument parsing (clap)
 ├── common.rs            # Shared utilities (process priority, networking)
 ├── drvegrdctl.rs        # Configuration utility (separate binary)
-├── rerun.rs             # Visualization tool (separate binary)
 └── clustering/
     ├── mod.rs           # DBSCAN clustering wrapper
     ├── tracker.rs       # ByteTrack multi-object tracking
     └── kalman.rs        # Kalman filter for state estimation
+examples/
+├── radar_viewer.rs      # Rerun viewer for live radar or PCAP playback
+└── zenoh_viewer.rs      # Rerun viewer for radarpub Zenoh topics
 ```
 
 ### Binary Targets
 
 | Binary | Features | Purpose |
 |--------|----------|---------|
-| `radarpub` | `can`, `zenoh` | Main radar publisher node |
+| `edgefirst-radarpub` | `can`, `zenoh` | Main radar publisher node |
 | `drvegrdctl` | `can` | Radar configuration utility |
-| `drvegrd-rerun` | `rerun` | PCAP visualization tool |
+| `radar_viewer` (example) | `rerun` | Live radar or PCAP visualization |
+| `zenoh_viewer` (example) | `rerun`, `zenoh` | Zenoh topic visualization |
 
 ### Feature Flags
 
@@ -241,6 +245,7 @@ graph TB
 
 1. **CAN Frame Reception** (`src/can.rs:read_frame()`)
    - Async read from SocketCAN socket
+   - Kernel receive timestamp (`SO_TIMESTAMPNS`) captured per frame
    - Extended frame format (29-bit CAN IDs)
    - Frame filtering by CAN ID
 
@@ -276,6 +281,7 @@ graph TB
 
 1. **UDP Packet Reception** (`src/net.rs:port5()`)
    - Linux `recvmmsg` for bulk reception (64 packets per call)
+   - Kernel receive timestamp (`SO_TIMESTAMPNS`) captured per packet
    - SMS protocol packet validation
    - Fixed packet size: 1458 bytes
 
@@ -293,6 +299,29 @@ graph TB
 4. **Zenoh Publishing**
    - Application key: `radar/cube` (wire key `{hostname}/radar/cube`)
    - Large message handling (SHM when available)
+
+---
+
+## Timestamps
+
+RadarPub follows the EdgeFirst middleware timestamp contract: `header.stamp` is the acquisition instant of the measurement as Unix time from the host `CLOCK_REALTIME`, and the Zenoh sample timestamp carries the same instant on every publish.
+
+The DRVEGRD has no clock synchronized to the host, so acquisition time is estimated from the host receive time of the measurement minus a configured sensor processing latency:
+
+| Topic | `header.stamp` |
+|-------|----------------|
+| `radar/targets` | Receive time of the first CAN frame of the target list (header `0x400`) minus `TARGETS_LATENCY` |
+| `radar/clusters` | Stamp of the newest target list in the clustering window |
+| `radar/cube` | Receive time of the cube's start-of-frame UDP packet minus `CUBE_LATENCY` |
+| `radar/info`, `tf_static` | Wall-clock time at each 1 Hz republish |
+
+**Receive time is captured before parsing.** The kernel stamps each CAN frame and UDP packet with `CLOCK_REALTIME` as it enters the network stack (`SO_TIMESTAMPNS`), so parser speed, target count and scheduling never move the stamp. When the kernel provides no timestamp, the clock is read immediately after the receive call. Both are wall-clock values and need no monotonic-to-realtime conversion.
+
+**Sensor latency** is an absolute duration in nanoseconds per stream. The default of 110 ms is two 55 ms radar cycles, from the datasheet processing latency of 2 to 4 cycles. Both values are logged at startup. Consumers must not subtract this latency again.
+
+**Clock steps** are followed immediately: no clock offset is cached, and the tracker measures track lifetimes on `CLOCK_MONOTONIC` so a step can neither stall it nor expire every track.
+
+**Sensor time** from the SMS port header counts microseconds since the radar powered on. It is kept unchanged in the `RadarCube.timestamp` body field and is never used as `header.stamp`.
 
 ---
 
@@ -523,6 +552,7 @@ packet-beta
 - Serialize with CDR (Common Data Representation)
 - Attach schema via `Encoding::APPLICATION_CDR.with_schema()`
 - Use `ZBytes::from()` for message wrapping
+- Attach `header.stamp` as the Zenoh sample timestamp (see [Timestamps](#timestamps))
 - QoS: Default priority, CongestionControl::Block
 
 **Implementation**: `src/radarpub.rs` publish functions
@@ -565,7 +595,8 @@ ROS2 standard message for point clouds.
 Custom message for 4D radar data.
 
 **Structure**:
-- Header: timestamp, frame_id
+- Header: stamp (host acquisition time), frame_id
+- timestamp: u64 (sensor time, microseconds since power-on)
 - frame_counter: u32
 - packets_captured: u16
 - packets_skipped: u16
@@ -656,6 +687,4 @@ Implemented with `thiserror` for ergonomic error propagation.
 
 ---
 
-**Document Version**: 1.0.0  
-**Last Updated**: 2025-01-25  
 **Contact**: support@au-zone.com

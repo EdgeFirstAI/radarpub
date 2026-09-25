@@ -3,8 +3,13 @@
 
 use crc16::{State, CCITT_FALSE};
 use log::{debug, trace};
-use socketcan::{tokio::CanSocket, CanFrame, EmbeddedFrame, Id as CanId, StandardId};
-use std::{fmt, io};
+use socketcan::{
+    tokio::CanSocket, CanFrame, EmbeddedFrame, Id as CanId, SocketOptions, StandardId,
+};
+use std::{
+    fmt, io,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[allow(unused)]
 /// DRVEGRD protocol error types.
@@ -63,6 +68,9 @@ pub struct Packet {
     pub id: u32,
     /// 8-byte data payload as u64
     pub data: u64,
+    /// Host receive time (`CLOCK_REALTIME`), from the kernel `SO_TIMESTAMPNS`
+    /// control message when enabled, else read right after the receive call.
+    pub rx_time: SystemTime,
 }
 
 /// Complete radar frame containing header and target list.
@@ -70,6 +78,8 @@ pub struct Packet {
 pub struct Frame {
     /// Frame header with timing and configuration
     pub header: Header,
+    /// Host receive time of the first CAN message of the frame (header 0).
+    pub rx_time: SystemTime,
     /// Array of detected targets (up to 256)
     pub targets: [Target; 256],
 }
@@ -580,7 +590,11 @@ async fn send_instruction(
 // Used by drvegrdctl for reading sensor state and diagnostics.
 #[allow(dead_code)]
 async fn recv_response(sock: &CanSocket) -> Result<u32, Error> {
-    let mut header = Packet { id: 0, data: 0 };
+    let mut header = Packet {
+        id: 0,
+        data: 0,
+        rx_time: UNIX_EPOCH,
+    };
 
     // Retry loop in case we receive a buffered target frame before the response.
     for _ in 0..100 {
@@ -843,6 +857,10 @@ pub async fn read_message(sock: &CanSocket) -> Result<Frame, Error> {
         }
     };
 
+    // The frame is stamped with the receive time of its first message so the
+    // stamp does not depend on the number of targets that follow or on how
+    // long they take to parse.
+    let rx_time = pkt.rx_time;
     let header = read_header_0(pkt.data, None)?;
     let header = read_header_1(read_frame(sock).await?.data, Some(header))?;
     let header = read_header_2(read_frame(sock).await?.data, Some(header))?;
@@ -873,7 +891,11 @@ pub async fn read_message(sock: &CanSocket) -> Result<Frame, Error> {
         targets[i as usize] = target;
     }
 
-    Ok(Frame { header, targets })
+    Ok(Frame {
+        header,
+        rx_time,
+        targets,
+    })
 }
 
 /// Parse radar frame header from CAN data payload.
@@ -1081,6 +1103,22 @@ fn load_data(data: &[u8]) -> u64 {
     u64::from_le_bytes(data[0..8].try_into().unwrap())
 }
 
+/// Enables kernel receive timestamps (`SO_TIMESTAMPNS`) on the CAN socket.
+///
+/// The kernel stamps each frame with `CLOCK_REALTIME` when it enters the
+/// network stack, so [`read_frame`] reports a receive time that does not
+/// depend on when the application gets to read the frame.
+///
+/// # Errors
+///
+/// Returns the `setsockopt` error; [`read_frame`] then falls back to reading
+/// the clock right after each receive call.
+// Used by edgefirst-radarpub; the other binaries share this module.
+#[allow(dead_code)]
+pub fn enable_rx_timestamps(can: &CanSocket) -> io::Result<()> {
+    can.set_recv_timestamp(true)
+}
+
 /// Read next CAN frame from socket.
 ///
 /// # Arguments
@@ -1092,8 +1130,9 @@ fn load_data(data: &[u8]) -> u64 {
 /// # Errors
 /// Returns Error if socket read fails
 pub async fn read_frame(can: &CanSocket) -> Result<Packet, Error> {
-    match can.read_frame().await {
-        Ok(CanFrame::Data(frame)) => {
+    match can.read_frame_with_timestamps().await {
+        Ok((CanFrame::Data(frame), timestamps)) => {
+            let rx_time = timestamps.socket.unwrap_or_else(SystemTime::now);
             let id = match frame.id() {
                 CanId::Standard(id) => id.as_raw() as u32,
                 CanId::Extended(id) => id.as_raw(),
@@ -1101,10 +1140,11 @@ pub async fn read_frame(can: &CanSocket) -> Result<Packet, Error> {
             Ok(Packet {
                 id,
                 data: load_data(frame.data()),
+                rx_time,
             })
         }
-        Ok(CanFrame::Remote(frame)) => panic!("Unexpected remote frame: {:?}", frame),
-        Ok(CanFrame::Error(frame)) => panic!("Unexpected error frame: {:?}", frame),
+        Ok((CanFrame::Remote(frame), _)) => panic!("Unexpected remote frame: {:?}", frame),
+        Ok((CanFrame::Error(frame), _)) => panic!("Unexpected error frame: {:?}", frame),
         Err(err) => Err(Error::Io(err)),
     }
 }

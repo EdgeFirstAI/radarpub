@@ -81,8 +81,8 @@ cargo build --release --features can,zenoh
 # Build the control utility
 cargo build --release --bin drvegrdctl --features can
 
-# Build the Rerun visualization tool (optional)
-cargo build --release --bin drvegrd-rerun --features rerun
+# Build the Rerun visualization examples (optional)
+cargo build --release --examples --features rerun,zenoh
 ```
 
 ### Configuring CAN Interface
