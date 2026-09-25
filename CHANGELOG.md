@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Minor release (1.8.0). The `eth` and `net` library signatures change without compatibility shims; radarpub ships as an application and these modules are internal to its binaries and examples.
+The next release is a minor version bump. The `eth` and `net` library signatures change without compatibility shims; radarpub ships as an application and these modules are internal to its binaries and examples.
 
 ### Added
 

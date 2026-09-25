@@ -687,6 +687,4 @@ Implemented with `thiserror` for ergonomic error propagation.
 
 ---
 
-**Document Version**: 1.1.0  
-**Last Updated**: 2026-09-24  
 **Contact**: support@au-zone.com

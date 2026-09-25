@@ -378,6 +378,6 @@ RADAR_CAN_INTERFACE=vcan0 cargo test
 ---
 
 **Process docs:** See [Au-Zone SPS repository](https://github.com/au-zone/sps) 00-README through 11-cicd-pipelines
-**v2.1** | 2026-09-24 | sebastien@au-zone.com
+**Contact:** sebastien@au-zone.com
 
 *This file helps AI assistants contribute effectively to RadarPub while maintaining quality, security, and consistency.*
