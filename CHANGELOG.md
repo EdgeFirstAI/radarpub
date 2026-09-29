@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-The next release is a minor version bump. The `eth` and `net` library signatures change without compatibility shims; radarpub ships as an application and these modules are internal to its binaries and examples.
+## [1.8.0] - 2026-09-29
+
+The `eth` and `net` library signatures change without compatibility shims; radarpub ships as an application and these modules are internal to its binaries and examples.
 
 ### Added
 
@@ -22,6 +24,7 @@ The next release is a minor version bump. The `eth` and `net` library signatures
 - `radar/info` and `tf_static` are re-stamped at each republish instead of keeping the startup time (EDGEAI-1942)
 - Track lifetimes run on `CLOCK_MONOTONIC`, so wall-clock steps no longer affect tracking (EDGEAI-1942)
 - Port 50063 uses the same batched `recvmmsg` receiver as port 50005 and waits on socket readiness (EDGEAI-1942)
+- Dependencies updated to their latest semver-compatible releases, including Zenoh 1.10.1
 - Library API: `net::port5` and `net::port63` send `net::Datagrams` (packets with per-packet receive times) instead of `Vec<u8>`; `eth::RadarCubeReader::read` takes the packet receive time; `eth::RadarCube` and `can::Frame` carry `rx_time` (EDGEAI-1942)
 
 ### Fixed
@@ -221,7 +224,8 @@ configuration-key changes from 1.7.1.
 - CAN DRVEGRD messages now always treated as little endian
 - Clippy warnings resolved
 
-[Unreleased]: https://github.com/EdgeFirstAI/radarpub/compare/v1.7.2...HEAD
+[Unreleased]: https://github.com/EdgeFirstAI/radarpub/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/EdgeFirstAI/radarpub/compare/v1.7.2...v1.8.0
 [1.7.2]: https://github.com/EdgeFirstAI/radarpub/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/EdgeFirstAI/radarpub/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/EdgeFirstAI/radarpub/compare/v1.6.3...v1.7.0
