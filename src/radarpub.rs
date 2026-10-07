@@ -275,7 +275,7 @@ async fn stream(
                     tx.send((stamp, targets.to_vec())).await.unwrap();
                 }
 
-                let (msg, enc) = format_targets(targets, stamp, args.mirror, &args.radar_frame_id)?;
+                let (msg, enc) = format_targets(targets, stamp, &args.radar_frame_id)?;
 
                 let span = info_span!("targets_publish");
                 async {
@@ -302,7 +302,6 @@ async fn stream(
 fn format_targets(
     targets: &[Target],
     stamp: Time,
-    mirror: bool,
     frame_id: &str,
 ) -> Result<(ZBytes, Encoding), Box<dyn std::error::Error>> {
     let n_targets = targets.len() as u32;
@@ -313,7 +312,6 @@ fn format_targets(
                 target.range as f32,
                 target.azimuth as f32,
                 target.elevation as f32,
-                mirror,
             );
             [
                 xyz[0],
@@ -422,12 +420,8 @@ async fn clustering_task(
             let dbscantargets: Vec<_> = targets
                 .iter()
                 .map(|t| {
-                    let [x, y, z] = transform_xyz(
-                        t.range as f32,
-                        t.azimuth as f32,
-                        t.elevation as f32,
-                        args.mirror,
-                    );
+                    let [x, y, z] =
+                        transform_xyz(t.range as f32, t.azimuth as f32, t.elevation as f32);
 
                     let mut v = [x, y, z, t.speed as f32];
                     for (i, val) in v.iter_mut().enumerate() {
@@ -444,13 +438,7 @@ async fn clustering_task(
             (targets, clusters)
         });
 
-        let (msg, enc) = format_clusters(
-            time,
-            &targets,
-            clusters,
-            args.mirror,
-            args.radar_frame_id.clone(),
-        )?;
+        let (msg, enc) = format_clusters(time, &targets, clusters, args.radar_frame_id.clone())?;
 
         let span = info_span!("clusters_publish");
         async {
@@ -476,7 +464,6 @@ fn format_clusters<T: Iterator<Item = f32>>(
     time: Time,
     targets: &[&Target],
     clusters: T,
-    mirror: bool,
     frame_id: String,
 ) -> Result<(ZBytes, Encoding), Box<dyn std::error::Error>> {
     let data: Vec<_> = targets
@@ -487,7 +474,6 @@ fn format_clusters<T: Iterator<Item = f32>>(
                 target.range as f32,
                 target.azimuth as f32,
                 target.elevation as f32,
-                mirror,
             );
             [
                 xyz[0],
@@ -718,17 +704,13 @@ fn format_cube(
     Ok((msg, enc))
 }
 
-fn transform_xyz(range: f32, azimuth: f32, elevation: f32, mirror: bool) -> [f32; 3] {
+fn transform_xyz(range: f32, azimuth: f32, elevation: f32) -> [f32; 3] {
     let azi = azimuth / 180.0 * PI;
     let ele = elevation / 180.0 * PI;
     let x = range * ele.cos() * azi.cos();
     let y = range * ele.cos() * azi.sin();
     let z = range * ele.sin();
-    if mirror {
-        [x, -y, z]
-    } else {
-        [x, y, z]
-    }
+    [x, y, z]
 }
 
 /// Publishes a metadata message once per second, re-stamped with the

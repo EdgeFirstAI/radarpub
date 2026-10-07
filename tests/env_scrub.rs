@@ -30,6 +30,10 @@ const TEST_NAME: &str = "empty_env_is_treated_as_unset";
 const VARS: [&str; 3] = ["CLUSTERING_EPS", "CLUSTERING", "RUST_LOG"];
 const ARGV: [&str; 1] = ["edgefirst-radarpub"];
 
+/// A variable an /etc/default/radarpub may set that is not bound to any
+/// argument. clap must ignore it rather than fail to parse.
+const UNBOUND_VAR: &str = "MIRROR";
+
 /// libtest flags that consume the following argument, so it is not a filter.
 /// `--skip` is handled separately because its value matters.
 const VALUE_FLAGS: [&str; 5] = [
@@ -111,6 +115,8 @@ fn main() {
         // SAFETY: single-threaded — this is `main` before any thread is spawned.
         std::env::set_var(name, "");
     }
+    // SAFETY: single-threaded, as above.
+    std::env::set_var(UNBOUND_VAR, "true");
     let before = Args::try_parse_from(ARGV);
     assert!(
         before.is_err(),
@@ -125,6 +131,11 @@ fn main() {
             "{name} should have been removed"
         );
     }
+    assert_eq!(
+        std::env::var(UNBOUND_VAR).as_deref(),
+        Ok("true"),
+        "{UNBOUND_VAR} is not bound to an argument and must not be scrubbed"
+    );
     let args = Args::try_parse_from(ARGV).expect("defaults must apply after scrubbing");
     assert_eq!(args.clustering_eps, 1.0);
     assert!(!args.clustering);

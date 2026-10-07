@@ -83,13 +83,6 @@ CLUSTERING_PARAM_SCALE="1 1 0 0"
 CLUSTERING_POINT_LIMIT="5"
 
 # ---------------------------------------------------------------------------
-# Mirror
-# ---------------------------------------------------------------------------
-# Mirror the radar data. When enabled, detection coordinates are mirrored
-# (flipped) to correct for radar mounting orientation.
-MIRROR="false"
-
-# ---------------------------------------------------------------------------
 # Sensor Latency
 # ---------------------------------------------------------------------------
 # Processing latency of the radar in nanoseconds, subtracted from the host
