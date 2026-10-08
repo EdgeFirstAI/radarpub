@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-10-07
+
+Removes radar point mirroring (EDGEAI-2021). A leftover `MIRROR` entry in `/etc/default/radarpub` is ignored; passing `--mirror` on the command line is now an error.
+
+### Changed
+
+- Dependencies updated to their latest semver-compatible releases, including tokio 1.53.2 and hyper 1.12.0
+
 ### Removed
 
 - The `MIRROR` / `--mirror` option; radar points are always published in the sensor's right-handed frame, orientation is expressed through TF, and mirroring is a view option in the web UI (EDGEAI-2021)
@@ -228,7 +236,8 @@ configuration-key changes from 1.7.1.
 - CAN DRVEGRD messages now always treated as little endian
 - Clippy warnings resolved
 
-[Unreleased]: https://github.com/EdgeFirstAI/radarpub/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/EdgeFirstAI/radarpub/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/EdgeFirstAI/radarpub/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/EdgeFirstAI/radarpub/compare/v1.7.2...v1.8.0
 [1.7.2]: https://github.com/EdgeFirstAI/radarpub/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/EdgeFirstAI/radarpub/compare/v1.7.0...v1.7.1
