@@ -263,10 +263,6 @@ pub struct Args {
     #[arg(long, env = "CLUSTERING_POINT_LIMIT", default_value = "5")]
     pub clustering_point_limit: usize,
 
-    /// Mirror the radar data
-    #[arg(long, env = "MIRROR")]
-    pub mirror: bool,
-
     /// Target list processing latency in nanoseconds, subtracted from the
     /// host receive time of the target list header to estimate the
     /// acquisition time. The default is two 55 ms radar cycles, from the

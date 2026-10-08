@@ -376,7 +376,6 @@ async fn can_loop(rr: &Option<RecordingStream>, device: Option<String>) {
                                 tgt.range as f32,
                                 tgt.azimuth as f32,
                                 tgt.elevation as f32,
-                                false,
                             )
                         }))
                         .with_radii([0.5])
@@ -394,7 +393,7 @@ async fn can_loop(rr: &Option<RecordingStream>, device: Option<String>) {
 
 /// Convert spherical coordinates to Cartesian XYZ
 #[cfg(feature = "can")]
-fn transform_xyz(range: f32, azimuth: f32, elevation: f32, mirror: bool) -> [f32; 3] {
+fn transform_xyz(range: f32, azimuth: f32, elevation: f32) -> [f32; 3] {
     use core::f32::consts::PI;
 
     let azi = azimuth / 180.0 * PI;
@@ -402,11 +401,7 @@ fn transform_xyz(range: f32, azimuth: f32, elevation: f32, mirror: bool) -> [f32
     let x = range * ele.cos() * azi.cos();
     let y = range * ele.cos() * azi.sin();
     let z = range * ele.sin();
-    if mirror {
-        [x, -y, z]
-    } else {
-        [x, y, z]
-    }
+    [x, y, z]
 }
 
 /// Convert an i16 ndarray into a Rerun tensor (rerun 0.36 dropped ndarray From impls).

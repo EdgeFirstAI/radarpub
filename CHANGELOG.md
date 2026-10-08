@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- The `MIRROR` / `--mirror` option; radar points are always published in the sensor's right-handed frame, orientation is expressed through TF, and mirroring is a view option in the web UI (EDGEAI-2021)
+
 ## [1.8.0] - 2026-09-29
 
 The `eth` and `net` library signatures change without compatibility shims; radarpub ships as an application and these modules are internal to its binaries and examples.
