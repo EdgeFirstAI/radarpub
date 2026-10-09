@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- PointCloud2 field datatypes come from the `edgefirst-schemas` `sensor_msgs::point_field` constants instead of a local enum (EDGEAI-2200).
+
 ## [1.9.0] - 2026-10-07
 
 Removes radar point mirroring (EDGEAI-2021). A leftover `MIRROR` entry in `/etc/default/radarpub` is ignored; passing `--mirror` on the command line is now an error.
