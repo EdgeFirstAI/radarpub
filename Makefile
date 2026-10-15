@@ -84,7 +84,7 @@ sbom:
 		echo "Installing scancode-toolkit..."; \
 		python3 -m venv venv; \
 		venv/bin/pip install --upgrade pip; \
-		venv/bin/pip install scancode-toolkit; \
+		venv/bin/pip install scancode-toolkit pluggy==1.6.0; \
 	fi
 	@if ! command -v cargo-cyclonedx >/dev/null 2>&1; then \
 		echo "Installing cargo-cyclonedx..."; \
