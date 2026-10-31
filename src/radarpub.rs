@@ -20,7 +20,7 @@ use edgefirst_schemas::{
     builtin_interfaces::Time,
     edgefirst_msgs::{self, RadarInfo},
     geometry_msgs::{Quaternion, Transform, TransformStamped, Vector3},
-    sensor_msgs::{PointCloud2, PointFieldView},
+    sensor_msgs::{point_field, PointCloud2, PointFieldView},
 };
 use eth::{RadarCube, RadarCubeReader};
 use kanal::{AsyncReceiver, AsyncSender};
@@ -45,19 +45,6 @@ use zenoh::{
 #[global_allocator]
 static GLOBAL: tracy_client::ProfiledAllocator<std::alloc::System> =
     tracy_client::ProfiledAllocator::new(std::alloc::System, 100);
-
-#[derive(Debug)]
-#[allow(dead_code)]
-pub enum PointFieldType {
-    INT8 = 1,
-    UINT8 = 2,
-    INT16 = 3,
-    UINT16 = 4,
-    INT32 = 5,
-    UINT32 = 6,
-    FLOAT32 = 7,
-    FLOAT64 = 8,
-}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // SAFETY: single-threaded here; runs before the tokio runtime (and its
@@ -329,37 +316,37 @@ fn format_targets(
         PointFieldView {
             name: "x",
             offset: 0,
-            datatype: PointFieldType::FLOAT32 as u8,
+            datatype: point_field::FLOAT32,
             count: 1,
         },
         PointFieldView {
             name: "y",
             offset: 4,
-            datatype: PointFieldType::FLOAT32 as u8,
+            datatype: point_field::FLOAT32,
             count: 1,
         },
         PointFieldView {
             name: "z",
             offset: 8,
-            datatype: PointFieldType::FLOAT32 as u8,
+            datatype: point_field::FLOAT32,
             count: 1,
         },
         PointFieldView {
             name: "speed",
             offset: 12,
-            datatype: PointFieldType::FLOAT32 as u8,
+            datatype: point_field::FLOAT32,
             count: 1,
         },
         PointFieldView {
             name: "power",
             offset: 16,
-            datatype: PointFieldType::FLOAT32 as u8,
+            datatype: point_field::FLOAT32,
             count: 1,
         },
         PointFieldView {
             name: "rcs",
             offset: 20,
-            datatype: PointFieldType::FLOAT32 as u8,
+            datatype: point_field::FLOAT32,
             count: 1,
         },
     ];
@@ -491,43 +478,43 @@ fn format_clusters<T: Iterator<Item = f32>>(
         PointFieldView {
             name: "x",
             offset: 0,
-            datatype: PointFieldType::FLOAT32 as u8,
+            datatype: point_field::FLOAT32,
             count: 1,
         },
         PointFieldView {
             name: "y",
             offset: 4,
-            datatype: PointFieldType::FLOAT32 as u8,
+            datatype: point_field::FLOAT32,
             count: 1,
         },
         PointFieldView {
             name: "z",
             offset: 8,
-            datatype: PointFieldType::FLOAT32 as u8,
+            datatype: point_field::FLOAT32,
             count: 1,
         },
         PointFieldView {
             name: "speed",
             offset: 12,
-            datatype: PointFieldType::FLOAT32 as u8,
+            datatype: point_field::FLOAT32,
             count: 1,
         },
         PointFieldView {
             name: "power",
             offset: 16,
-            datatype: PointFieldType::FLOAT32 as u8,
+            datatype: point_field::FLOAT32,
             count: 1,
         },
         PointFieldView {
             name: "rcs",
             offset: 20,
-            datatype: PointFieldType::FLOAT32 as u8,
+            datatype: point_field::FLOAT32,
             count: 1,
         },
         PointFieldView {
             name: "cluster_id",
             offset: 24,
-            datatype: PointFieldType::FLOAT32 as u8,
+            datatype: point_field::FLOAT32,
             count: 1,
         },
     ];
